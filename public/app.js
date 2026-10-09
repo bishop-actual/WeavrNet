@@ -43,6 +43,7 @@ const S = {
   wsAttempt: 0,
   isPlaying: false,
   settingsDirty: false,
+  editingLocation: false,
   requests: new Map(),  // requestId -> { label }
 };
 let positionTimer = null;
@@ -254,6 +255,7 @@ function route() {
   S.selected = id;
   S.playback = null;
   S.config = undefined;
+  S.editingLocation = false;
   clearInterval(positionTimer);
   clearInterval(uptimeTimer);
   $('#app').classList.toggle('show-detail', !!id);
@@ -310,7 +312,7 @@ function deviceStatusLine(d) {
   return [st, statusLabel(st)];
 }
 
-function deviceCard(d) {
+function deviceCard(d, showLocation = false) {
   const [cls, label] = deviceStatusLine(d);
   const tag = d.status === 'pending' ? '<span class="tag pending">NEW</span>'
     : d.status === 'blocked' ? '<span class="tag blocked">BLOCKED</span>' : '';
@@ -326,6 +328,7 @@ function deviceCard(d) {
       <div class="device-icon" style="background:${iconBg(d.appearance)}">${iconFor(d)}</div>
       <div class="device-info">
         <div class="device-name">${esc(d.name)} ${tag}</div>
+        ${showLocation && d.location ? `<div class="device-location">📍 ${esc(d.location)}</div>` : ''}
         <div class="device-status status-${esc(cls)}">${esc(label)}</div>
         ${d.online && d.playback?.title ? `<div class="device-now-playing">${esc(d.playback.title)}</div>` : ''}
       </div>
@@ -341,11 +344,29 @@ function renderDeviceList() {
   const online = rest.filter((d) => d.online).length;
   let html = '';
   if (pending.length) {
-    html += `<div class="section-title">Waiting for approval</div>${pending.map(deviceCard).join('')}`;
+    html += `<div class="section-title">Waiting for approval</div>${pending.map((d) => deviceCard(d, true)).join('')}`;
   }
-  html += `<div class="section-title">Devices${rest.length ? ` · ${online} online` : ''}</div>`;
-  if (rest.length) {
-    html += rest.map(deviceCard).join('');
+  const located = rest.some((d) => d.location);
+  if (!located || !rest.length) {
+    html += `<div class="section-title">Devices${rest.length ? ` · ${online} online` : ''}</div>`;
+  }
+  if (rest.length && located) {
+    // Group by location nickname ("Dad's house"); unnamed locations last.
+    const groups = new Map();
+    for (const d of rest) {
+      const key = d.location || '';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(d);
+    }
+    const keys = [...groups.keys()].sort((a, b) => (!a) - (!b) || a.localeCompare(b));
+    for (const key of keys) {
+      const list = groups.get(key);
+      const n = list.filter((d) => d.online).length;
+      html += `<div class="section-title">${key ? `📍 ${esc(key)}` : 'No location'} · ${n}/${list.length} online</div>`;
+      html += list.map((d) => deviceCard(d)).join('');
+    }
+  } else if (rest.length) {
+    html += rest.map((d) => deviceCard(d)).join('');
   } else {
     html += `
       <div class="scanning"><div class="pulse"></div><span>Waiting for Weavr devices to connect…</span></div>
@@ -373,6 +394,7 @@ function renderDashboard() {
       <div id="compIcon" class="device-icon" style="width:38px;height:38px;font-size:18px">📺</div>
       <div class="comp-device">
         <div class="comp-device-name" id="compName">—</div>
+        <div class="comp-location" id="compLocation" hidden></div>
         <div class="comp-device-status"><span class="conn-dot connecting" id="compDot"></span><span id="compStatus">Connecting…</span></div>
       </div>
       <div class="short-code" id="compCode"></div>
@@ -423,6 +445,8 @@ function renderHeader() {
   const d = selectedDevice();
   if (!d || !$('#compName')) return;
   $('#compName').textContent = d.name;
+  $('#compLocation').textContent = d.location ? `📍 ${d.location}` : '';
+  $('#compLocation').hidden = !d.location;
   $('#compCode').textContent = d.shortCode || '';
   $('#compIcon').textContent = iconFor(d);
   $('#compIcon').style.background = iconBg(d.appearance);
@@ -674,6 +698,11 @@ function settingsHtml() {
     </div>
 
     <div class="section">
+      <div class="section-title">Location</div>
+      <div class="card">${locationEditorHtml(c.locationName ?? d.location ?? '')}</div>
+    </div>
+
+    <div class="section">
       <div class="section-title">Room</div>
       <div class="card">
         <label class="label" for="cfgName">Room name</label>
@@ -726,6 +755,25 @@ function settingsHtml() {
   </div>`;
 }
 
+function locationEditorHtml(value) {
+  if (S.editingLocation) {
+    return `<label class="label" for="cfgLocation">Location nickname</label>
+      <div class="row">
+        <input class="input grow" id="cfgLocation" maxlength="40" value="${esc(value)}" placeholder="e.g. Dad's house">
+        <button class="btn" data-action="save-location">Save</button>
+        <button class="btn ghost" data-action="cancel-location">Cancel</button>
+      </div>
+      <div class="card-sub">Groups devices in WeavrNet. Leave empty to remove.</div>`;
+  }
+  return `<div class="row">
+      <div class="grow">
+        <div class="label" style="margin-top:0">Location nickname</div>
+        <div class="card-title">${value ? `📍 ${esc(value)}` : '<span style="color:var(--muted);font-weight:500">Not set</span>'}</div>
+      </div>
+      <button class="icon-btn" data-action="edit-location" title="Edit location" aria-label="Edit location">✎</button>
+    </div>`;
+}
+
 // ── Device admin tab ──
 
 function deviceAdminHtml() {
@@ -737,6 +785,7 @@ function deviceAdminHtml() {
       <div class="card-title">Device</div>
       <dl class="kv mt">
         <dt>Status</dt><dd>${esc(d.status)}${d.online ? ' · online' : ''}</dd>
+        <dt>Location</dt><dd>${esc(d.location || '—')}</dd>
         <dt>Short code</dt><dd>${esc(d.shortCode || '—')}</dd>
         <dt>Platform</dt><dd>${esc(d.platform || '—')}</dd>
         <dt>Weavr version</dt><dd>${esc(d.appVersion || '—')}</dd>
@@ -815,6 +864,20 @@ const actions = {
     if (confirmAction(`Remove ${d?.name || 'this device'} from WeavrNet?`)) wsSend({ type: 'device.remove', deviceId: el.dataset.id });
   },
   'preset-name': (el) => { $('#cfgName').value = el.dataset.name; },
+  'edit-location': () => {
+    S.editingLocation = true;
+    renderTab();
+    const input = $('#cfgLocation');
+    input?.focus();
+    input?.select();
+  },
+  'cancel-location': () => { S.editingLocation = false; renderTab(); },
+  'save-location': () => {
+    const locationName = $('#cfgLocation').value.trim();
+    S.editingLocation = false;
+    sendPatch({ locationName }, locationName ? 'Location updated' : 'Location cleared');
+    renderTab();
+  },
   'save-name': () => {
     const name = $('#cfgName').value.trim();
     if (!name) return toast('Enter a room name', true);
@@ -880,6 +943,10 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.device-card[data-action]')) {
     e.preventDefault();
     e.target.click();
+  }
+  if (e.target.id === 'cfgLocation') {
+    if (e.key === 'Enter') { e.preventDefault(); actions['save-location'](); return; }
+    if (e.key === 'Escape') { actions['cancel-location'](); return; }
   }
   if (e.key === 'Escape') closeSheet();
 });

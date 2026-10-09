@@ -122,6 +122,7 @@ class Hub {
     return {
       id,
       name: d.name,
+      location: d.location || '',
       shortCode: d.shortCode,
       appearance: d.appearance,
       platform: d.platform,
@@ -131,7 +132,7 @@ class Hub {
       createdAt: d.createdAt,
       lastSeen: live ? Date.now() : d.lastSeen,
       lastIp: d.lastIp,
-      remoteEdit: live ? (live.config ? true : (live.remoteEdit ?? null)) : null,
+      remoteEdit: live ? live.remoteEdit : null,
       playback: st && d.status === 'approved'
         ? { status: st.status, title: st.title || null, subtitle: st.subtitle || null }
         : null,
@@ -141,7 +142,7 @@ class Hub {
   deviceList() {
     return Object.keys(this.store.data.devices)
       .map((id) => this.summary(id))
-      .sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+      .sort((a, b) => a.location.localeCompare(b.location) || (b.online - a.online) || a.name.localeCompare(b.name));
   }
 
   _deviceChanged(id) {
@@ -249,6 +250,7 @@ class Hub {
     }
 
     d.name = str(h.deviceName, 64) || d.name || 'Weavr';
+    if (typeof h.locationName === 'string') d.location = str(h.locationName, 64);
     d.shortCode = str(h.shortCode, 12) || d.shortCode || '';
     d.appearance = sanitizeAppearance(h.appearance) || d.appearance || null;
     d.platform = str(h.platform, 32) || d.platform || '';
@@ -294,6 +296,7 @@ class Hub {
       }
       case 'profile': {
         d.name = str(msg.deviceName, 64) || d.name;
+        if (typeof msg.locationName === 'string') d.location = str(msg.locationName, 64);
         if (typeof msg.shortCode === 'string') d.shortCode = str(msg.shortCode, 12);
         const a = sanitizeAppearance(msg.appearance);
         if (a) d.appearance = a;

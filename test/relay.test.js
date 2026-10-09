@@ -62,10 +62,10 @@ function socket(url, headers) {
   return ws;
 }
 
-async function agent({ deviceId = crypto.randomUUID(), secret = crypto.randomBytes(32).toString('base64url'), joinKey, name = 'Lounge' } = {}) {
+async function agent({ deviceId = crypto.randomUUID(), secret = crypto.randomBytes(32).toString('base64url'), joinKey, name = 'Lounge', location } = {}) {
   const ws = socket(`ws://${base}/agent`);
   await ws.opened;
-  ws.sendJson({ type: 'hello', protocol: 1, deviceId, deviceName: name, shortCode: 'ABC123', platform: 'test', joinKey });
+  ws.sendJson({ type: 'hello', protocol: 1, deviceId, deviceName: name, shortCode: 'ABC123', platform: 'test', joinKey, locationName: location });
   const msg = await ws.next(['challenge', 'rejected']);
   if (msg.type === 'rejected') return { ws, rejected: msg, deviceId, secret };
   ws.sendJson(msg.known
@@ -125,12 +125,16 @@ test('device registers, relays state and commands, and re-authenticates by HMAC'
   const hello = await ui.next('hello');
   assert.ok(Array.isArray(hello.devices));
 
-  const a = await agent({ name: 'Den' });
+  const a = await agent({ name: 'Den', location: "Dad's house" });
   assert.equal(a.known, false);
   assert.equal(a.welcome.status, 'approved');
   const dev = await ui.next('device', (m) => m.device.id === a.deviceId);
   assert.equal(dev.device.online, true);
   assert.equal(dev.device.name, 'Den');
+  assert.equal(dev.device.location, "Dad's house");
+
+  a.ws.sendJson({ type: 'profile', deviceName: 'Den', locationName: 'Beach hut' });
+  await ui.next('device', (m) => m.device.id === a.deviceId && m.device.location === 'Beach hut');
 
   ui.sendJson({ type: 'subscribe', deviceId: a.deviceId });
   await ui.next('device', (m) => m.device.id === a.deviceId);

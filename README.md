@@ -29,10 +29,13 @@ docker compose up -d --build
 
 Open `http://<server>:7780` and choose an admin password. That's it.
 
-Then on each TV: **Weavr → Settings → Companion → WeavrNet — remote access**,
-enter your server's address (e.g. `weavrnet.example.com` or `203.0.113.5:7780`),
-leave the switch **on** and press **Save & Connect**. The device appears in the
-web app as soon as its handshake completes.
+Then on each TV: **Weavr → Settings → Companion**, open the **WeavrNet — remote
+access** drop-down, enter your server's address (e.g. `weavrnet.example.com` or
+`203.0.113.5:7780`) and press **Save & Turn On**. The **Remote access** switch
+stays greyed out until an address is saved, and turns on when you save one.
+Optionally tap the ✎ pencil to give the TV a **location nickname** such as
+“Dad's house”. The device appears in the web app as soon as its handshake
+completes.
 
 ### Without Docker
 
@@ -102,6 +105,9 @@ up in your list. On a public server, turn on **Require approval**, set a
   to open its dashboard. Add it to your home screen for an app-like,
   full-screen experience.
 * **Desktop:** the device list stays on the left and the dashboard on the right.
+* **Locations:** devices with a location nickname are grouped under it
+  (📍 Dad's house, 📍 Beach hut…), with an online count per location. The
+  nickname can be edited on the TV or with the ✎ pencil in the Settings tab.
 
 Each device dashboard has:
 
@@ -110,7 +116,7 @@ Each device dashboard has:
 | **Sources** | Lists the stream's sources and switches between them, like WeavrLink |
 | **Diagnostics** | Buffer health, bitrate, resolution, codec, reconnects, failover history, stream URL |
 | **Remote** | Stop, refresh, ±30 s, volume |
-| **Settings** | Remote editing: room name, icon and background; add, edit, enable or remove M3U and Xtream sources; general toggles; metadata API keys |
+| **Settings** | Remote editing: location nickname, room name, icon and background; add, edit, enable or remove M3U and Xtream sources; general toggles; metadata API keys |
 | **Device** | Status, platform, version and last address, plus Approve, Block, Unblock and Remove |
 
 ### Privacy controls on the TV
@@ -154,7 +160,7 @@ impersonate a device to another. The full message reference is in
 ```bash
 npm test                                         # relay tests (node:test)
 npm start                                        # run locally on :7780
-node tools/fake-agent.js ws://localhost:7780 --name "Test Lounge"
+node tools/fake-agent.js ws://localhost:7780 --name "Test Lounge" --location "Dad's house"
 ```
 
 `tools/fake-agent.js` is a stand-in Weavr TV that speaks the real device

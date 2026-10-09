@@ -112,6 +112,8 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .back-btn{background:none;border:none;color:var(--sub);font-size:26px;padding:0 4px;line-height:1}
 .comp-device{flex:1;min-width:0}
 .comp-device-name{font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.comp-location{font-size:11px;color:var(--accent2);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.device-location{font-size:11px;color:var(--accent2);margin-top:2px}
 .comp-device-status{font-size:11px;margin-top:1px;color:var(--sub)}
 .conn-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);margin-right:4px;vertical-align:middle}
 .conn-dot.disconnected{background:var(--danger)}

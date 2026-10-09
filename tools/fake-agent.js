@@ -4,7 +4,7 @@
 // same /agent protocol as the app, pretends to play something, applies
 // remote config edits to an in-memory copy and logs the commands it gets.
 //
-//   node tools/fake-agent.js ws://localhost:7780 --name "Test Lounge" [--join-key KEY]
+//   node tools/fake-agent.js ws://localhost:7780 --name "Test Lounge" [--location "Dad's house"] [--join-key KEY]
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -20,6 +20,7 @@ const flag = (name, fallback) => {
 const base = (args.find((a) => !a.startsWith('--') && /^(wss?|https?):/.test(a)) || 'ws://localhost:7780')
   .replace(/^http/, 'ws').replace(/\/+$/, '');
 const name = flag('name', 'Fake Weavr');
+const location = flag('location', '');
 const idFile = path.join(os.tmpdir(), `weavrnet-fake-${name.replace(/\W+/g, '_')}.json`);
 
 let identity;
@@ -31,6 +32,7 @@ try { identity = JSON.parse(fs.readFileSync(idFile, 'utf8')); } catch (_) {
 const config = {
   allowRemoteEdit: true,
   deviceName: name,
+  locationName: location,
   appearance: { roomName: name, iconKey: 'tv', iconColor: '#FFFFFF', bgType: 'gradient', bgColor1: '#0EA5FF', bgColor2: '#00D4B8' },
   sources: [
     { id: 'src-1', type: 'm3u', name: 'Demo M3U', enabled: true, m3uUrl: 'http://example.com/list.m3u', hasPassword: false },
@@ -64,6 +66,7 @@ const state = () => ({
 
 function applyPatch(p) {
   if (typeof p.deviceName === 'string') { config.deviceName = p.deviceName; config.appearance.roomName = p.deviceName; }
+  if (typeof p.locationName === 'string') config.locationName = p.locationName;
   if (p.appearance) Object.assign(config.appearance, p.appearance);
   if (p.settings) {
     for (const [k, v] of Object.entries(p.settings)) {
@@ -96,7 +99,7 @@ function connect() {
     send({
       type: 'hello', protocol: 1, deviceId: identity.deviceId, deviceName: config.deviceName,
       shortCode: 'FAK123', appearance: config.appearance, platform: 'fake', appVersion: '0.0.0',
-      joinKey: flag('join-key', undefined),
+      joinKey: flag('join-key', undefined), locationName: config.locationName,
     });
   });
 
@@ -131,7 +134,7 @@ function connect() {
         try {
           applyPatch(msg.patch);
           send({ type: 'config.result', requestId: msg.requestId, ok: true });
-          send({ type: 'profile', deviceName: config.deviceName, shortCode: 'FAK123', appearance: config.appearance });
+          send({ type: 'profile', deviceName: config.deviceName, locationName: config.locationName, shortCode: 'FAK123', appearance: config.appearance });
           send({ type: 'config', data: config });
         } catch (e) {
           send({ type: 'config.result', requestId: msg.requestId, ok: false, error: e.message });

@@ -11,7 +11,7 @@ finish its handshake within 15 s.
 
 | Direction | Message |
 |---|---|
-| device → relay | `{type:"hello", protocol:1, deviceId, deviceName, shortCode, appearance, platform, appVersion, joinKey?}` |
+| device → relay | `{type:"hello", protocol:1, deviceId, deviceName, locationName?, shortCode, appearance, platform, appVersion, joinKey?}` |
 | relay → device | `{type:"challenge", protocol:1, nonce, known}` |
 | device → relay | known: `{type:"auth", proof}` where `proof = base64(HMAC-SHA256(key=secret, msg=nonce))` |
 |  | new: `{type:"auth", secret}` (≥ 32 chars, chosen by the device and pinned by the relay) |
@@ -26,7 +26,7 @@ devices the relay doesn't already know.
 |---|---|---|
 | device → relay | `{type:"state", data: PlaybackState}` | Same JSON WeavrLink broadcasts on the LAN |
 | device → relay | `{type:"diagnostics", data: StreamDiagnostics}` | |
-| device → relay | `{type:"profile", deviceName, shortCode, appearance}` | After a rename or appearance change |
+| device → relay | `{type:"profile", deviceName, locationName?, shortCode, appearance}` | After a rename, location or appearance change |
 | device → relay | `{type:"config", data: Config \| null}` | `null` = remote editing is off; the relay drops what it had |
 | device → relay | `{type:"config.result", requestId, ok, error?}` | |
 | relay → device | `{type:"approved"}` | A pending device was approved |
@@ -58,6 +58,7 @@ Any other close: reconnect with exponential back-off (1 s doubling to 60 s).
 {
   "allowRemoteEdit": true,
   "deviceName": "Living Room",
+  "locationName": "Dad's house",                // free-text nickname, may be ""
   "appearance": { "roomName", "iconKey", "iconColor", "bgType", "bgColor1", "bgColor2" },
   "sources": [{ "id", "type": "m3u|xtream", "name", "enabled", "m3uUrl", "xtreamHost",
                 "xtreamUsername", "hasPassword", "lastRefreshed" }],
@@ -74,6 +75,7 @@ Every field is optional:
 ```jsonc
 {
   "deviceName": "Kitchen",
+  "locationName": "Beach hut",                   // "" clears it
   "appearance": { "iconKey": "kitchen", "bgType": "solid", "bgColor1": "#FFB340" },
   "settings": { "discoverEnabled": false, "tmdbApiKey": "…" },      // "" clears a key
   "sources": {
