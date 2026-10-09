@@ -1,0 +1,28 @@
+services:
+  weavrnet:
+    image: weavrnet:latest
+    build: .
+    container_name: weavrnet
+    restart: unless-stopped
+    ports:
+      - "7780:7780"
+    volumes:
+      # Named volume: already owned by the container's non-root user.
+      # To use a host folder instead (e.g. ./data:/data), first run
+      #   mkdir -p data && sudo chown 1000:1000 data
+      - weavrnet-data:/data
+    environment:
+      # Shown in the web app and to Weavr devices.
+      WEAVRNET_NAME: "WeavrNet"
+      # Set to "true" behind a reverse proxy (Caddy, Traefik, nginx...) that adds X-Forwarded-*.
+      TRUST_PROXY: "false"
+      # Optional. Leave unset to choose the password in the web UI on first visit.
+      # Setting it also resets a forgotten password on the next restart.
+      # WEAVRNET_ADMIN_PASSWORD: "change-me"
+      # Optional. When set, new devices must enter this key in Weavr to register.
+      # WEAVRNET_JOIN_KEY: "ABCD-EFGH-JKLM"
+      # Optional. When true, new devices wait for an admin to approve them.
+      # WEAVRNET_REQUIRE_APPROVAL: "true"
+
+volumes:
+  weavrnet-data:

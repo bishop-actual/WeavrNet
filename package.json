@@ -1,0 +1,20 @@
+{
+  "name": "weavrnet",
+  "version": "0.1.0",
+  "description": "Self-hosted relay that lets Weavr devices be controlled (WeavrLink-style) over the internet.",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "fake-agent": "node tools/fake-agent.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

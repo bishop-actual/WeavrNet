@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Build image
+        run: docker build -t weavrnet:ci .
+      - name: Smoke test
+        run: |
+          docker run -d --name wn -p 7780:7780 weavrnet:ci
+          for i in $(seq 1 20); do curl -fs localhost:7780/api/health && break; sleep 1; done
+          curl -fs localhost:7780/api/ping
+          docker logs wn

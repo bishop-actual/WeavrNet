@@ -1,0 +1,13 @@
+{
+  "name": "WeavrNet",
+  "short_name": "WeavrNet",
+  "description": "Control your Weavr devices from anywhere.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#033B46",
+  "theme_color": "#033B46",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
