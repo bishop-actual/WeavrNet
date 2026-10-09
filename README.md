@@ -37,15 +37,6 @@ Optionally tap the ✎ pencil to give the TV a **location nickname** such as
 “Dad's house”. The device appears in the web app as soon as its handshake
 completes.
 
-### Without Docker
-
-Node.js 20+:
-
-```bash
-npm ci
-npm start          # listens on :7780, stores data in ./data
-```
-
 ## Putting it on the internet (HTTPS)
 
 Run WeavrNet behind a reverse proxy that terminates TLS, and set
@@ -82,7 +73,7 @@ wins and the UI field is locked.
 |---|---|---|
 | `PORT` | `7780` | Listen port |
 | `HOST` | `0.0.0.0` | Listen address |
-| `DATA_DIR` | `/data` (Docker), `./data` | Where `weavrnet.json` is stored. Back this up. |
+| `DATA_DIR` | `/data` | Where `weavrnet.json` is stored (the `weavrnet-data` volume). Back this up. |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For/Proto/Host` from a reverse proxy |
 | `TLS_CERT`, `TLS_KEY` | – | Serve HTTPS directly |
 | `WEAVRNET_NAME` | `WeavrNet` | *UI.* Server name shown in the app and on TVs |
@@ -157,25 +148,8 @@ impersonate a device to another. The full message reference is in
 
 ## Development
 
-```bash
-npm test                                         # relay tests (node:test)
-npm start                                        # run locally on :7780
-node tools/fake-agent.js ws://localhost:7780 --name "Test Lounge" --location "Dad's house"
-```
-
-`tools/fake-agent.js` is a stand-in Weavr TV that speaks the real device
-protocol, pretends to play a film, logs commands and applies remote edits. Use
-it to try the web app without a TV.
-
-Layout:
-
-```
-src/index.js    HTTP API, static files, WebSocket upgrades, auth checks
-src/hub.js      The relay: device handshake, routing, approvals, remote edits
-src/auth.js     scrypt password hashing, sessions, login throttling, HMAC
-src/store.js    JSON file persistence (DATA_DIR/weavrnet.json, mode 0600)
-public/         The web app (plain HTML/CSS/JS, installable PWA, no build step)
-```
+The relay's tests run in CI (`npm test` inside the repo). Day-to-day use only
+needs Docker.
 
 ## License
 
