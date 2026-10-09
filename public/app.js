@@ -680,15 +680,19 @@ function settingsHtml() {
         <div class="grow" style="font-weight:600">${esc(s.name)}</div>
         ${switchHtml(`data-action="source-toggle" data-id="${esc(s.id)}"`, s.enabled)}
       </div>
-      <div class="src-url">${esc(s.type === 'xtream' ? `${s.xtreamHost || ''} · ${s.xtreamUsername || ''}` : s.m3uUrl || '')}</div>
+      <div class="src-url">${esc(s.type === 'xtream' ? `${s.xtreamHost || ''} · ${s.xtreamUsername || ''}` : s.url || s.m3uUrl || '')}</div>
       <div class="row mt">
         <span class="grow" style="font-size:11px;color:var(--muted)">${s.lastRefreshed ? `Updated ${ago(Date.parse(s.lastRefreshed))}` : ''}</span>
-        <button class="btn sm ghost" data-action="source-edit" data-id="${esc(s.id)}">Edit</button>
+        ${s.editable === false ? '' : `<button class="btn sm ghost" data-action="source-edit" data-id="${esc(s.id)}">Edit</button>`}
         <button class="btn sm danger" data-action="source-remove" data-id="${esc(s.id)}">Remove</button>
       </div>
     </div>`).join('') || '<div class="empty">No sources on this device yet.</div>';
 
+  const locked = c.locked
+    ? `<div class="section"><div class="banner" style="margin:0"><span class="grow">🔒 The active profile on this TV keeps its settings locked. Switch profile on the TV to make changes.</span></div></div>`
+    : '';
   return `<div class="tab-panel" id="tab-settings">
+    ${locked}
     <div class="section">
       <div class="stats">
         <div class="stat"><b>${esc(stats.channels ?? '—')}</b><span>Channels</span></div>
@@ -1012,7 +1016,7 @@ function openSourceSheet(type, src) {
        ${field('srcUser', 'Username', src?.xtreamUsername, 'required autocomplete="off"')}
        <label class="label" for="srcPass">Password</label>
        <input class="input" id="srcPass" type="password" autocomplete="new-password" placeholder="${src?.hasPassword ? 'Leave blank to keep the current password' : ''}">`
-    : field('srcUrl', 'M3U URL', src?.m3uUrl, 'required inputmode="url" placeholder="https://example.com/playlist.m3u"')}
+    : field('srcUrl', 'M3U URL', src?.m3uUrl, `inputmode="url" placeholder="${src ? 'Leave blank to keep the current URL' : 'https://example.com/playlist.m3u'}"`)}
     <button class="btn block mt" type="submit">${src ? 'Save source' : 'Add source'}</button>
   </div>`;
   openSheet(src ? `Edit ${isX ? 'Xtream' : 'M3U'} source` : `Add ${isX ? 'Xtream' : 'M3U'} source`, body, () => {
@@ -1025,8 +1029,11 @@ function openSourceSheet(type, src) {
       if (pass || !src) entry.xtreamPassword = pass;
       if (!entry.xtreamHost || !entry.xtreamUsername) return toast('Server URL and username are required', true);
     } else {
-      entry.m3uUrl = $('#srcUrl').value.trim();
-      if (!/^https?:\/\//i.test(entry.m3uUrl)) return toast('Enter an http(s) M3U URL', true);
+      const url = $('#srcUrl').value.trim();
+      if (url || !src) {
+        if (!/^https?:\/\//i.test(url)) return toast('Enter an http(s) M3U URL', true);
+        entry.m3uUrl = url;
+      }
     }
     if (!name) return toast('Give the source a name', true);
     if (src) sendPatch({ sources: { update: [{ id: src.id, ...entry }] } }, 'Source updated');

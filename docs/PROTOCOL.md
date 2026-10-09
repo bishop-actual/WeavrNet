@@ -60,8 +60,11 @@ Any other close: reconnect with exponential back-off (1 s doubling to 60 s).
   "deviceName": "Living Room",
   "locationName": "Dad's house",                // free-text nickname, may be ""
   "appearance": { "roomName", "iconKey", "iconColor", "bgType", "bgColor1", "bgColor2" },
-  "sources": [{ "id", "type": "m3u|xtream", "name", "enabled", "m3uUrl", "xtreamHost",
-                "xtreamUsername", "hasPassword", "lastRefreshed" }],
+  "locked": false,                               // active profile locks settings; edits are refused
+  "sources": [{ "id", "type", "name", "enabled",
+                "url",                             // display URL with credentials masked
+                "editable",                        // false for media servers / aggregators
+                "xtreamHost", "xtreamUsername", "hasPassword", "lastRefreshed" }],
   "settings": { "showFavouritesMenu", "discoverEnabled", "tmdbEnabled" },
   "secrets":  { "tmdbApiKey": true, "omdbApiKey": false, ... },   // set or not; never the value
   "stats":    { "channels", "movies", "series" }
