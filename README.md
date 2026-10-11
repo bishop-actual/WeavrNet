@@ -21,15 +21,19 @@ forwarding. Only the WeavrNet server has to be reachable from the internet.
 
 ## Quick start (Docker)
 
+The image is published to GitHub Container Registry for amd64 and arm64:
+`ghcr.io/bishop-actual/weavrnet:latest`. Save
+[`docker-compose.yml`](docker-compose.yml) on your server and run:
+
 ```bash
-git clone https://github.com/bishop-actual/WeavrNet.git
-cd WeavrNet
-docker compose up -d --build
+docker compose up -d
 ```
+
+To update later: `docker compose pull && docker compose up -d`.
 
 Open `http://<server>:7780` and choose an admin password. That's it.
 
-Then on each TV: **Weavr → Settings → Companion**, open the **WeavrNet — remote
+Then on each TV: **Weavr → Settings → WeavrLink**, open the **WeavrNet — remote
 access** drop-down, enter your server's address (e.g. `weavrnet.example.com` or
 `203.0.113.5:7780`) and press **Save & Turn On**. The **Remote access** switch
 stays greyed out until an address is saved, and turns on when you save one.

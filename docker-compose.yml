@@ -1,7 +1,6 @@
 services:
   weavrnet:
-    image: weavrnet:latest
-    build: .
+    image: ghcr.io/bishop-actual/weavrnet:latest
     container_name: weavrnet
     restart: unless-stopped
     ports:
