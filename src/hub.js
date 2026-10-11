@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const { deviceProof, safeEqual } = require('./auth');
+const { Links } = require('./link');
 
 const PROTOCOL = 1;
 
@@ -28,6 +29,9 @@ const COMMAND_ARGS = { positionMs: 'number', seconds: 'number', sourceIndex: 'nu
 const HANDSHAKE_MS = 15000;
 const CONFIG_TIMEOUT_MS = 20000;
 const HEARTBEAT_MS = 30000;
+// A TV busy with a big import can't answer pings for a while; only drop a
+// device after this long without hearing anything from it.
+const AGENT_SILENCE_MS = 150000;
 
 const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -64,6 +68,7 @@ class Hub {
     this.agents = new Map(); // deviceId -> { ws, ip, state, config, connectedAt }
     this.uis = new Set();    // { ws, deviceId }
     this.pending = new Map(); // requestId -> { ui, deviceId, timer }
+    this.links = new Links(this, log);
     this._heartbeat = setInterval(() => this._beat(), HEARTBEAT_MS);
     this._heartbeat.unref();
   }
@@ -131,6 +136,7 @@ class Hub {
       online: !!live,
       createdAt: d.createdAt,
       lastSeen: live ? Date.now() : d.lastSeen,
+      link: Array.isArray(d.features) && d.features.includes('link'),
       remoteEdit: live ? live.remoteEdit : null,
       playback: st && d.status === 'approved'
         ? { status: st.status, title: st.title || null, subtitle: st.subtitle || null }
@@ -165,14 +171,15 @@ class Hub {
 
   attachAgent(ws, ip) {
     const conn = { ws, ip, stage: 'hello', id: null, nonce: null, hello: null };
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
+    ws.lastHeard = Date.now();
+    ws.on('pong', () => { ws.lastHeard = Date.now(); });
 
     const timer = setTimeout(() => {
       if (conn.stage !== 'ready') ws.close(CLOSE.HANDSHAKE_TIMEOUT, 'handshake timeout');
     }, HANDSHAKE_MS);
 
     ws.on('message', (raw) => {
+      ws.lastHeard = Date.now();
       const msg = parse(raw);
       if (!msg) return;
       try {
@@ -193,6 +200,7 @@ class Hub {
         const d = this.store.data.devices[conn.id];
         if (d) { d.lastSeen = Date.now(); this.store.save(); }
         this._failPendingFor(conn.id, 'Device disconnected');
+        this.links.deviceGone(conn.id);
         this._deviceChanged(conn.id);
         this.log.info(`[agent] ${conn.id} offline`);
       }
@@ -255,6 +263,8 @@ class Hub {
     d.platform = str(h.platform, 32) || d.platform || '';
     d.appVersion = str(h.appVersion, 32) || d.appVersion || '';
     delete d.lastIp; // no longer kept
+    d.features = Array.isArray(h.features) ? h.features.filter((f) => typeof f === 'string').slice(0, 16) : [];
+    delete d.localAddress;
     d.lastSeen = Date.now();
     this.store.save();
 
@@ -262,6 +272,7 @@ class Hub {
     if (prev) {
       send(prev.ws, { type: 'rejected', reason: 'replaced by a newer connection' });
       prev.ws.close(CLOSE.REPLACED, 'replaced');
+      this.links.deviceGone(conn.id);
     }
     this.agents.set(conn.id, { ws: conn.ws, ip: conn.ip, state: null, config: null, remoteEdit: null });
     conn.stage = 'ready';
@@ -276,6 +287,7 @@ class Hub {
     const d = this.store.data.devices[id];
     if (!live || live.ws !== conn.ws || !d) return;
     const approved = d.status === 'approved';
+    if (approved && this.links.fromAgent(id, msg)) return;
 
     switch (msg.type) {
       case 'state': {
@@ -310,6 +322,11 @@ class Hub {
         live.remoteEdit = !!live.config;
         if (approved) this._toSubscribers(id, { type: 'config', deviceId: id, data: live.config });
         this._deviceChanged(id);
+        return;
+      }
+      case 'notice': {
+        // WeavrLink progress messages ("Source added — 120 movies…").
+        if (approved && isObj(msg.data)) this._toSubscribers(id, { type: 'notice', deviceId: id, data: msg.data });
         return;
       }
       case 'config.result': {
@@ -349,6 +366,7 @@ class Hub {
     if (!d) return false;
     d.status = 'blocked';
     this.store.save();
+    this.links.revokeDevice(id);
     const live = this.agents.get(id);
     if (live) {
       send(live.ws, { type: 'rejected', reason: 'blocked' });
@@ -371,6 +389,7 @@ class Hub {
     if (!this.store.data.devices[id]) return false;
     delete this.store.data.devices[id];
     this.store.save();
+    this.links.revokeDevice(id);
     const live = this.agents.get(id);
     if (live) {
       this.agents.delete(id);
@@ -458,6 +477,15 @@ class Hub {
       case 'device.block': return this.block(id) || error('Cannot block device');
       case 'device.unblock': return this.unblock(id) || error('Cannot unblock device');
       case 'device.remove': return this.remove(id) || error('Cannot remove device');
+      case 'link.open': {
+        if (!d) return error('Unknown device');
+        if (!this.links.available(id)) {
+          return error(live ? 'Update Weavr on this TV to use WeavrLink through WeavrNet' : 'Device is offline');
+        }
+        const token = this.links.mint(id);
+        const code = encodeURIComponent(d.shortCode || '');
+        return send(ui.ws, { type: 'link', deviceId: id, url: `/link/${token}/?code=${code}` });
+      }
       case 'ping': return send(ui.ws, { type: 'pong' });
       default: return error(`Unknown message ${msg.type}`);
     }
@@ -473,12 +501,20 @@ class Hub {
   }
 
   _beat() {
-    const sockets = [...[...this.agents.values()].map((a) => a.ws), ...[...this.uis].map((u) => u.ws)];
-    for (const ws of sockets) {
+    const now = Date.now();
+    for (const { ws } of this.agents.values()) {
+      if (now - ws.lastHeard > AGENT_SILENCE_MS) { ws.terminate(); continue; }
+      try { ws.ping(); } catch (_) {}
+      // App-level too: the Weavr app can't see protocol pings, and uses
+      // these to notice a relay that has silently gone away.
+      send(ws, { type: 'ping' });
+    }
+    for (const { ws } of this.uis) {
       if (!ws.isAlive) { ws.terminate(); continue; }
       ws.isAlive = false;
       try { ws.ping(); } catch (_) {}
     }
+    this.links.prune();
   }
 }
 
