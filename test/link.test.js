@@ -204,3 +204,18 @@ test('a busy TV that misses pings stays online until it has been silent a long t
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(srv.hub.agents.has(deviceId), false);
 });
+
+test('admin socket works behind proxies that rewrite X-Forwarded-Host, but not cross-site', async () => {
+  const tryWs = (origin, xfh) => new Promise((resolve) => {
+    const headers = { cookie, origin, host: 'weavrnet.example.com' };
+    if (xfh) headers['x-forwarded-host'] = xfh;
+    const ws = new WebSocket(`ws://${base}/ws`, { headers });
+    ws.on('error', () => {});
+    ws.on('open', () => { ws.close(); resolve(200); });
+    ws.on('unexpected-response', (_, res) => resolve(res.statusCode));
+  });
+  for (const xfh of [null, 'weavrnet.example.com', 'weavrnet.example.com:443', 'weavrnet.example.com, traefik', 'traefik']) {
+    assert.equal(await tryWs('https://weavrnet.example.com', xfh), 200, `x-forwarded-host ${xfh}`);
+  }
+  assert.equal(await tryWs('https://evil.example', 'weavrnet.example.com'), 403);
+});

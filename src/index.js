@@ -64,11 +64,28 @@ function createServer(config = load(), { log = console } = {}) {
 
   // Browsers always send Origin on cross-site writes and WebSocket upgrades;
   // reject any that don't match the host we're being served from.
+  // The page's Origin must be one of the names we're reached by: the Host
+  // header, or any X-Forwarded-Host a trusted proxy chain added. Proxies vary
+  // ("a.com:443", "a.com, traefik"), so compare host names with default
+  // ports dropped, and accept a match on any of them.
   const sameOrigin = (req) => {
     const origin = req.headers.origin;
     if (!origin) return true;
-    const host = (proxied(req) && req.headers['x-forwarded-host']) || req.headers.host;
-    try { return new URL(origin).host === host; } catch (_) { return false; }
+    let o;
+    try { o = new URL(origin); } catch (_) { return false; }
+    const defaultPort = o.protocol === 'https:' ? '443' : '80';
+    const norm = (h) => {
+      const v = String(h || '').trim().toLowerCase();
+      return v.endsWith(`:${defaultPort}`) ? v.slice(0, -defaultPort.length - 1) : v;
+    };
+    const names = [req.headers.host];
+    if (proxied(req)) names.push(...String(req.headers['x-forwarded-host'] || '').split(','));
+    const ok = names.map(norm).filter(Boolean).includes(norm(o.host));
+    if (!ok) {
+      log.warn(`[http] refused cross-origin ${req.method} ${req.url.split('?')[0]}: origin ${origin}, `
+        + `host ${req.headers.host}, x-forwarded-host ${req.headers['x-forwarded-host'] || '-'}`);
+    }
+    return ok;
   };
 
   const json = (res, status, body, headers = {}) => {
