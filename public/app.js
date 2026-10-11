@@ -44,6 +44,8 @@ const S = {
   isPlaying: false,
   settingsDirty: false,
   editingLocation: false,
+  mode: null,           // 'link' (the TV's own WeavrLink) or 'classic'
+  linkUrl: null,        // /link/<token>/ for the selected device
   requests: new Map(),  // requestId -> { label }
 };
 let positionTimer = null;
@@ -198,9 +200,28 @@ function onMessage(msg) {
       S.devices.set(msg.device.id, msg.device);
       renderDeviceList();
       if (msg.device.id === S.selected) {
+        const was = S.wasOnline;
+        S.wasOnline = msg.device.online;
+        if (modeFor(msg.device) !== S.mode) { renderDashboard(); break; }
+        if (S.mode === 'link') {
+          renderHeader();
+          // Back online: start WeavrLink afresh, since its calls failed while away.
+          if (msg.device.online && !was) { S.linkUrl = null; requestLink(); }
+          renderLinkOverlay();
+          break;
+        }
         if (!msg.device.online) { S.playback = null; S.config = undefined; renderPlayback(); renderTab(); }
         renderHeader();
       }
+      break;
+    case 'link':
+      if (msg.deviceId !== S.selected || S.mode !== 'link') return;
+      S.linkUrl = msg.url;
+      $('#linkFrame').src = msg.url;
+      renderLinkOverlay();
+      break;
+    case 'notice':
+      if (msg.deviceId === S.selected && S.mode !== 'link') toast(msg.data?.text || '', msg.data?.ok === false);
       break;
     case 'device.removed':
       S.devices.delete(msg.deviceId);
@@ -235,6 +256,8 @@ function onMessage(msg) {
     }
     case 'error':
       if (msg.requestId) S.requests.delete(msg.requestId);
+      if (S.mode === 'link' && msg.deviceId === S.selected && !S.linkUrl) S.linkError = msg.error;
+      renderLinkOverlay();
       toast(msg.error, true);
       break;
     default:
@@ -256,6 +279,10 @@ function route() {
   S.playback = null;
   S.config = undefined;
   S.editingLocation = false;
+  S.mode = null;
+  S.linkUrl = null;
+  S.linkError = null;
+  S.wasOnline = !!S.devices.get(id)?.online;
   clearInterval(positionTimer);
   clearInterval(uptimeTimer);
   $('#app').classList.toggle('show-detail', !!id);
@@ -387,8 +414,36 @@ function renderDeviceList() {
 // ═══════════════════════════════════════════════════════════════
 const TABS = [['sources', 'Sources'], ['diagnostics', 'Diagnostics'], ['remote', 'Remote'], ['settings', 'Settings'], ['device', 'Device']];
 
-function renderDashboard() {
-  $('#dashboard').innerHTML = `
+// A TV running a Weavr build with the WeavrLink tunnel shows its own
+// WeavrLink — every screen and setting, exactly as on the LAN. Older builds
+// get the basic remote below.
+function modeFor(d) {
+  return d && d.link && d.status === 'approved' ? 'link' : 'classic';
+}
+
+function requestLink() {
+  const d = selectedDevice();
+  if (!d?.online || S.linkUrl) return;
+  S.linkError = null;
+  wsSend({ type: 'link.open', deviceId: d.id });
+}
+
+function renderLinkOverlay() {
+  const el = $('#linkOverlay');
+  if (!el) return;
+  const d = selectedDevice();
+  let text = '';
+  if (!d?.online) text = `<div style="font-size:40px;opacity:.5">📺</div><div><b>${esc(d?.name || 'The TV')} is offline</b></div>
+    <div class="card-sub">WeavrLink comes back here as soon as Weavr reconnects to ${esc(S.server?.name || 'WeavrNet')}.</div>`;
+  else if (S.linkError) text = `<div><b>Couldn't open WeavrLink</b></div><div class="card-sub">${esc(S.linkError)}</div>
+    <button class="btn sm mt" data-action="retry-link">Try again</button>`;
+  else if (!S.linkUrl) text = '<div class="scanning"><div class="pulse"></div>Opening WeavrLink…</div>';
+  el.innerHTML = text;
+  el.hidden = !text;
+}
+
+function headerHtml() {
+  return `
     <div class="comp-header">
       <button class="back-btn" data-action="back" aria-label="Back">‹</button>
       <div id="compIcon" class="device-icon" style="width:38px;height:38px;font-size:18px">📺</div>
@@ -398,8 +453,28 @@ function renderDashboard() {
         <div class="comp-device-status"><span class="conn-dot connecting" id="compDot"></span><span id="compStatus">Connecting…</span></div>
       </div>
       <div class="short-code" id="compCode"></div>
+      <button class="icon-btn" data-action="device-info" title="Device details" aria-label="Device details">ⓘ</button>
     </div>
-    <div id="compBanner"></div>
+    <div id="compBanner"></div>`;
+}
+
+function renderDashboard() {
+  const d = selectedDevice();
+  S.mode = modeFor(d);
+  $('#dashboard').classList.toggle('link-mode', S.mode === 'link');
+  if (S.mode === 'link') {
+    $('#dashboard').innerHTML = `${headerHtml()}
+      <div class="link-wrap">
+        <iframe id="linkFrame" title="WeavrLink" referrerpolicy="no-referrer"
+          sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"></iframe>
+        <div class="link-overlay" id="linkOverlay" hidden></div>
+      </div>`;
+    renderHeader();
+    renderLinkOverlay();
+    requestLink();
+    return;
+  }
+  $('#dashboard').innerHTML = `${headerHtml()}
 
     <div class="now-playing">
       <div class="np-backdrop">
@@ -467,8 +542,10 @@ function renderHeader() {
   } else if (d.status === 'blocked') {
     banner = `<div class="banner"><span class="grow">This device is blocked and cannot connect.</span>
       <button class="btn sm ghost" data-action="unblock" data-id="${esc(d.id)}">Unblock</button></div>`;
-  } else if (!d.online) {
+  } else if (!d.online && S.mode !== 'link') {
     banner = '<div class="banner info"><span class="grow">The device is offline. Controls return when Weavr reconnects to the relay.</span></div>';
+  } else if (S.mode === 'classic' && d.online && !d.link) {
+    banner = '<div class="banner info"><span class="grow">Update Weavr on this TV to get the full WeavrLink here — every screen and setting.</span></div>';
   }
   $('#compBanner').innerHTML = banner;
   const usable = d.status === 'approved' && d.online;
@@ -778,13 +855,25 @@ function locationEditorHtml(value) {
     </div>`;
 }
 
+function addressLabel(ip) {
+  if (!ip) return '—';
+  const v4 = ip.replace(/^::ffff:/, '');
+  const priv = /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(v4)
+    || /^(::1|f[cd]|fe80)/i.test(ip);
+  return priv ? `${v4} (local network)` : v4;
+}
+
 // ── Device admin tab ──
 
 function deviceAdminHtml() {
+  return `<div class="tab-panel"><div class="section">${deviceCardsHtml()}</div></div>`;
+}
+
+function deviceCardsHtml() {
   const d = selectedDevice();
   if (!d) return '';
   const remote = d.remoteEdit === true ? 'Allowed' : d.remoteEdit === false ? 'Turned off on device' : '—';
-  return `<div class="tab-panel"><div class="section">
+  return `
     <div class="card">
       <div class="card-title">Device</div>
       <dl class="kv mt">
@@ -794,7 +883,8 @@ function deviceAdminHtml() {
         <dt>Platform</dt><dd>${esc(d.platform || '—')}</dd>
         <dt>Weavr version</dt><dd>${esc(d.appVersion || '—')}</dd>
         <dt>Remote editing</dt><dd>${esc(remote)}</dd>
-        <dt>Last address</dt><dd>${esc(d.lastIp || '—')}</dd>
+        <dt>${d.online ? 'Connecting from' : 'Last connected from'}</dt><dd>${esc(addressLabel(d.lastIp))}</dd>
+        <dt>Home network address</dt><dd>${esc(d.localAddress || '—')}</dd>
         <dt>Last seen</dt><dd>${d.online ? 'now' : esc(ago(d.lastSeen))}</dd>
         <dt>Added</dt><dd>${d.createdAt ? esc(new Date(d.createdAt).toLocaleString()) : '—'}</dd>
         <dt>Device ID</dt><dd title="${esc(d.id)}">${esc(d.id)}</dd>
@@ -812,8 +902,7 @@ function deviceAdminHtml() {
       <div class="card-title">Remove</div>
       <div class="card-sub">Forget this device. Weavr shows “Removed by admin” and stops reconnecting until someone on the TV re-enables WeavrNet.</div>
       <button class="btn danger block mt" data-action="remove" data-id="${esc(d.id)}">Remove device</button>
-    </div>
-  </div></div>`;
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -861,11 +950,15 @@ const actions = {
     const d = S.devices.get(el.dataset.id);
     if (confirmAction(`Block ${d?.name || 'this device'}? It will be disconnected and refused until unblocked.`)) {
       wsSend({ type: 'device.block', deviceId: el.dataset.id });
+      closeSheet();
     }
   },
   remove: (el) => {
     const d = S.devices.get(el.dataset.id);
-    if (confirmAction(`Remove ${d?.name || 'this device'} from WeavrNet?`)) wsSend({ type: 'device.remove', deviceId: el.dataset.id });
+    if (confirmAction(`Remove ${d?.name || 'this device'} from WeavrNet?`)) {
+      wsSend({ type: 'device.remove', deviceId: el.dataset.id });
+      closeSheet();
+    }
   },
   'preset-name': (el) => { $('#cfgName').value = el.dataset.name; },
   'edit-location': () => {
@@ -915,6 +1008,8 @@ const actions = {
     if (confirmAction('Clear this key on the device?')) sendPatch({ settings: { [el.dataset.key]: '' } }, 'Key cleared');
   },
   'open-server': () => openServerSheet(),
+  'device-info': () => openDeviceSheet(),
+  'retry-link': () => { S.linkUrl = null; S.linkError = null; renderLinkOverlay(); requestLink(); },
   'close-sheet': () => closeSheet(),
   'gen-join-key': () => {
     const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -1038,6 +1133,27 @@ function openSourceSheet(type, src) {
     if (!name) return toast('Give the source a name', true);
     if (src) sendPatch({ sources: { update: [{ id: src.id, ...entry }] } }, 'Source updated');
     else sendPatch({ sources: { add: [{ type, ...entry }] } }, 'Source added — the TV is refreshing');
+    closeSheet();
+  });
+}
+
+function openDeviceSheet() {
+  const d = selectedDevice();
+  if (!d) return;
+  const canEdit = d.online && d.status === 'approved' && d.remoteEdit !== false;
+  const body = `
+    <div class="card">
+      <label class="label" for="devLocation">Location nickname</label>
+      <div class="row">
+        <input class="input grow" id="devLocation" maxlength="40" value="${esc(d.location || '')}" placeholder="e.g. Dad's house" ${canEdit ? '' : 'disabled'}>
+        <button class="btn" type="submit" ${canEdit ? '' : 'disabled'}>Save</button>
+      </div>
+      <div class="card-sub">${canEdit ? 'Groups devices in WeavrNet. Leave empty to remove.' : 'Can be changed while the TV is online and allows remote changes.'}</div>
+    </div>
+    ${deviceCardsHtml()}`;
+  openSheet(d.name, body, () => {
+    const locationName = $('#devLocation').value.trim();
+    sendPatch({ locationName }, locationName ? 'Location updated' : 'Location cleared');
     closeSheet();
   });
 }

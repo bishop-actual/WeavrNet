@@ -17,8 +17,11 @@ function load(env = process.env) {
     // Optional native TLS. Most installs terminate TLS at a reverse proxy instead.
     tlsCert: env.TLS_CERT || null,
     tlsKey: env.TLS_KEY || null,
-    // Honour X-Forwarded-For / X-Forwarded-Proto from a reverse proxy.
-    trustProxy: bool(env.TRUST_PROXY, false),
+    // Honour X-Forwarded-* headers from a reverse proxy: true, false, or
+    // (unset) auto — trusted only when the connection comes from a private
+    // address, which is what a proxy on the same Docker host looks like.
+    trustProxy: env.TRUST_PROXY === undefined || env.TRUST_PROXY === '' || env.TRUST_PROXY === 'auto'
+      ? 'auto' : bool(env.TRUST_PROXY, false),
     // Values below override what the admin sets in the UI when present.
     serverName: env.WEAVRNET_NAME || null,
     adminPassword: env.WEAVRNET_ADMIN_PASSWORD || null,
