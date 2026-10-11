@@ -43,11 +43,9 @@ completes.
 
 ## Putting it on the internet (HTTPS)
 
-Run WeavrNet behind a reverse proxy that terminates TLS. WeavrNet notices
-when requests come through a proxy on a private network (such as Traefik or
-Caddy on the same Docker host) and reads the real client address and HTTPS
-status from its `X-Forwarded-*` headers (and `CF-Connecting-IP` behind
-Cloudflare). Example with [Caddy](https://caddyserver.com):
+Run WeavrNet behind a reverse proxy that terminates TLS, and set
+`TRUST_PROXY=true` so it sees real client IPs and marks cookies `Secure`.
+Example with [Caddy](https://caddyserver.com):
 
 ```caddyfile
 weavrnet.example.com {
@@ -55,29 +53,8 @@ weavrnet.example.com {
 }
 ```
 
-Caddy and Traefik proxy WebSockets automatically. With nginx, forward the
-`Upgrade` and `Connection` headers for `/agent`, `/ws` and `/link/`.
-
-### Traefik + Authelia
-
-TVs can't sign in to Authelia, and WeavrLink pages run in a sandbox that
-doesn't carry Authelia's cookie. So `/agent` and `/link/` must **not** go
-through the Authelia middleware. They're protected by the device handshake
-and by private, expiring `/link/<token>/` URLs handed out only to signed-in admins. Use two routers:
-
-```yaml
-labels:
-  - traefik.enable=true
-  - traefik.http.services.weavrnet.loadbalancer.server.port=7780
-  # Web app, behind Authelia
-  - traefik.http.routers.weavrnet.rule=Host(`weavrnet.example.com`)
-  - traefik.http.routers.weavrnet.middlewares=authelia@docker
-  # TVs, WeavrLink tunnel and public probes, without Authelia
-  - traefik.http.routers.weavrnet-open.rule=Host(`weavrnet.example.com`) && (Path(`/agent`) || PathPrefix(`/link/`) || Path(`/api/ping`) || Path(`/api/health`))
-  - traefik.http.routers.weavrnet-open.priority=100
-```
-
-(Add your usual `entrypoints` / `tls.certresolver` labels to both routers.)
+Caddy proxies WebSockets automatically. With nginx, forward the `Upgrade` and
+`Connection` headers for `/agent` and `/ws`.
 
 In Weavr, a bare domain such as `weavrnet.example.com` connects over TLS
 (`wss://`). An IP or `host:port` (other than 443) connects without TLS
@@ -101,7 +78,7 @@ wins and the UI field is locked.
 | `PORT` | `7780` | Listen port |
 | `HOST` | `0.0.0.0` | Listen address |
 | `DATA_DIR` | `/data` | Where `weavrnet.json` is stored (the `weavrnet-data` volume). Back this up. |
-| `TRUST_PROXY` | auto | Trust `X-Forwarded-*` headers. Unset: only from private addresses (a proxy on your network). `true` / `false` to force. |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For/Proto/Host` from a reverse proxy |
 | `TLS_CERT`, `TLS_KEY` | – | Serve HTTPS directly |
 | `WEAVRNET_NAME` | `WeavrNet` | *UI.* Server name shown in the app and on TVs |
 | `WEAVRNET_ADMIN_PASSWORD` | – | Admin password. If unset, you choose one on first visit. Setting it also **resets a forgotten password** on the next restart. |
@@ -127,28 +104,15 @@ up in your list. On a public server, turn on **Require approval**, set a
   (📍 Dad's house, 📍 Beach hut…), with an online count per location. The
   nickname can be edited on the TV or with the ✎ pencil in the Settings tab.
 
-### WeavrLink, from anywhere
+Each device dashboard has:
 
-Opening a device shows **that TV's own WeavrLink**, carried over the
-WeavrNet connection. Every WeavrLink screen works: Live TV, Media, Library,
-the remote, search, the guide and the full **Settings**. That covers adding and
-editing every kind of source, Request server, Home Lists, Sport Hub, Backup &
-transfer, General, Media and the rest.
-
-Adding a source from here behaves exactly as on the LAN. The TV shows its
-loading dialog, and WeavrNet shows the "Adding source…" progress and the
-result ("… added — 1,204 movies, 87 series").
-
-The ⓘ button in the header has the WeavrNet side: the location nickname,
-device details (the address it connects from and its home-network address),
-and Approve, Block, Unblock or Remove.
-
-WeavrLink pages are served from `/link/<token>/` in a sandbox (an opaque
-origin). Whatever a TV sends can't read your WeavrNet login or call the
-admin API.
-
-TVs on an older Weavr build get a basic remote (now playing, controls,
-sources, diagnostics, a few settings) and a prompt to update.
+| Tab | What it does |
+|---|---|
+| **Sources** | Lists the stream's sources and switches between them, like WeavrLink |
+| **Diagnostics** | Buffer health, bitrate, resolution, codec, reconnects, failover history, stream URL |
+| **Remote** | Stop, refresh, ±30 s, volume |
+| **Settings** | Remote editing: location nickname, room name, icon and background; add, edit, enable or remove M3U and Xtream sources; general toggles; metadata API keys |
+| **Device** | Status, platform, version and last address, plus Approve, Block, Unblock and Remove |
 
 ### Privacy controls on the TV
 

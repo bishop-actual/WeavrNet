@@ -15,8 +15,6 @@ const {
   SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies,
 } = require('./auth');
 const { version } = require('../package.json');
-const net = require('./net');
-const { TOKEN_RE } = require('./link');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -53,39 +51,27 @@ function createServer(config = load(), { log = console } = {}) {
 
   const setupRequired = () => !store.data.admin.passwordHash;
 
-  const clientIp = (req) => net.clientIp(config.trustProxy, req);
-  const proxied = (req) => net.trusts(config.trustProxy, req);
+  const clientIp = (req) => {
+    if (config.trustProxy) {
+      const fwd = req.headers['x-forwarded-for'];
+      if (fwd) return fwd.split(',')[0].trim();
+    }
+    return req.socket.remoteAddress;
+  };
 
   const isSecure = (req) => !!req.socket.encrypted
-    || (proxied(req) && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https');
+    || (config.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https');
 
   const sessionToken = (req) => parseCookies(req.headers.cookie)[SESSION_COOKIE];
   const authed = (req) => sessions.valid(sessionToken(req));
 
   // Browsers always send Origin on cross-site writes and WebSocket upgrades;
   // reject any that don't match the host we're being served from.
-  // The page's Origin must be one of the names we're reached by: the Host
-  // header, or any X-Forwarded-Host a trusted proxy chain added. Proxies vary
-  // ("a.com:443", "a.com, traefik"), so compare host names with default
-  // ports dropped, and accept a match on any of them.
   const sameOrigin = (req) => {
     const origin = req.headers.origin;
     if (!origin) return true;
-    let o;
-    try { o = new URL(origin); } catch (_) { return false; }
-    const defaultPort = o.protocol === 'https:' ? '443' : '80';
-    const norm = (h) => {
-      const v = String(h || '').trim().toLowerCase();
-      return v.endsWith(`:${defaultPort}`) ? v.slice(0, -defaultPort.length - 1) : v;
-    };
-    const names = [req.headers.host];
-    if (proxied(req)) names.push(...String(req.headers['x-forwarded-host'] || '').split(','));
-    const ok = names.map(norm).filter(Boolean).includes(norm(o.host));
-    if (!ok) {
-      log.warn(`[http] refused cross-origin ${req.method} ${req.url.split('?')[0]}: origin ${origin}, `
-        + `host ${req.headers.host}, x-forwarded-host ${req.headers['x-forwarded-host'] || '-'}`);
-    }
-    return ok;
+    const host = (config.trustProxy && req.headers['x-forwarded-host']) || req.headers.host;
+    try { return new URL(origin).host === host; } catch (_) { return false; }
   };
 
   const json = (res, status, body, headers = {}) => {
@@ -191,7 +177,6 @@ function createServer(config = load(), { log = console } = {}) {
         if (typeof next !== 'string' || next.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters' });
         store.data.admin.passwordHash = hashPassword(next);
         sessions.destroyAll();
-        hub.links.revokeAll();
         store.flush();
         return startSession(req, res, { ok: true });
       }
@@ -218,14 +203,6 @@ function createServer(config = load(), { log = console } = {}) {
 
   const handler = (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    const link = url.pathname.match(/^\/link\/([^/]+)\/(.*)$/);
-    if (link) {
-      hub.links.http(req, res, link[1], link[2] + url.search).catch((e) => {
-        log.error(e);
-        if (!res.headersSent) { res.writeHead(500); res.end(); }
-      });
-      return;
-    }
     if (url.pathname.startsWith('/api/')) {
       api(req, res, url).catch((e) => {
         if (!e.status) log.error(e);
@@ -241,9 +218,8 @@ function createServer(config = load(), { log = console } = {}) {
     ? https.createServer({ cert: fs.readFileSync(config.tlsCert), key: fs.readFileSync(config.tlsKey) }, handler)
     : http.createServer(handler);
 
-  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const uiWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
-  const linkWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url, 'http://localhost');
@@ -251,17 +227,6 @@ function createServer(config = load(), { log = console } = {}) {
       socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
     };
-    const link = pathname.match(/^\/link\/([^/]+)\/(.*)$/);
-    if (link) {
-      // Authorised by the token alone: the sandboxed page has an opaque
-      // origin (Origin: null) and no cookies.
-      const deviceId = TOKEN_RE.test(link[1]) ? hub.links.resolve(link[1]) : null;
-      if (!deviceId) return refuse(404, 'Not Found');
-      if (!hub.links.available(deviceId)) return refuse(503, 'Service Unavailable');
-      const search = new URL(req.url, 'http://localhost').search;
-      linkWss.handleUpgrade(req, socket, head, (ws) => hub.links.socket(ws, deviceId, link[2] + search));
-      return;
-    }
     if (pathname === '/agent') {
       agentWss.handleUpgrade(req, socket, head, (ws) => hub.attachAgent(ws, clientIp(req)));
     } else if (pathname === '/ws') {
