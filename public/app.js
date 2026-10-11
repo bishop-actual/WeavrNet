@@ -794,7 +794,6 @@ function deviceAdminHtml() {
         <dt>Platform</dt><dd>${esc(d.platform || '—')}</dd>
         <dt>Weavr version</dt><dd>${esc(d.appVersion || '—')}</dd>
         <dt>Remote editing</dt><dd>${esc(remote)}</dd>
-        <dt>Last address</dt><dd>${esc(d.lastIp || '—')}</dd>
         <dt>Last seen</dt><dd>${d.online ? 'now' : esc(ago(d.lastSeen))}</dd>
         <dt>Added</dt><dd>${d.createdAt ? esc(new Date(d.createdAt).toLocaleString()) : '—'}</dd>
         <dt>Device ID</dt><dd title="${esc(d.id)}">${esc(d.id)}</dd>

@@ -131,7 +131,6 @@ class Hub {
       online: !!live,
       createdAt: d.createdAt,
       lastSeen: live ? Date.now() : d.lastSeen,
-      lastIp: d.lastIp,
       remoteEdit: live ? live.remoteEdit : null,
       playback: st && d.status === 'approved'
         ? { status: st.status, title: st.title || null, subtitle: st.subtitle || null }
@@ -255,7 +254,7 @@ class Hub {
     d.appearance = sanitizeAppearance(h.appearance) || d.appearance || null;
     d.platform = str(h.platform, 32) || d.platform || '';
     d.appVersion = str(h.appVersion, 32) || d.appVersion || '';
-    d.lastIp = conn.ip;
+    delete d.lastIp; // no longer kept
     d.lastSeen = Date.now();
     this.store.save();
 
