@@ -161,7 +161,9 @@ The web page tells you what's wrong instead of guessing:
 |---|---|
 | *WeavrNet didn't answer — your proxy replied instead (HTTP 404/502/504)…* | Traefik (or Authelia, Cloudflare…) answered, not WeavrNet. Usually the container is restarting, which takes a few seconds. The page keeps retrying by itself. If it never clears, check the container is running (`docker ps`) and that your proxy sends this hostname to it. |
 | *Two WeavrNet servers are answering at this address* | Two containers share the same Traefik labels (often an old one left running after a change), so sign-ins and devices are split between them. Remove the extra one: `docker ps -a \| grep -i weavrnet`. |
-| *Incorrect password* | WeavrNet itself rejected it. To reset, set `WEAVRNET_ADMIN_PASSWORD` on the container and restart it (quotes around the value are fine). |
+| *Your proxy redirected this request instead of passing it to WeavrNet* | A login middleware (e.g. Authelia) sits in front of WeavrNet's API. Remove it from WeavrNet's router, or at least exclude `/api`, `/ws`, `/agent` and `/link`. |
+| *An older WeavrNet container answered this request* | Two WeavrNet containers share this address; remove the old one. |
+| *Incorrect password* | WeavrNet itself rejected it. Use **Forgot password?** on the sign-in page: it writes a one-time code to the container log (`docker logs --tail 5 weavrnet`), and you enter it with a new password. If the message mentions `WEAVRNET_ADMIN_PASSWORD`, that compose value decides the password on every start — check it (write any `$` as `$$`) or remove it. |
 
 The image has no Docker `HEALTHCHECK` on purpose. Traefik won't route to a
 container until its health check passes, which made WeavrNet unreachable

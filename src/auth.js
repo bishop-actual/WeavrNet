@@ -96,6 +96,13 @@ class Throttle {
   }
 
   reset(key) { this.hits.delete(key); }
+
+  /** Seconds until [key] may try again (0 when not blocked). */
+  retryAfter(key) {
+    const h = this.hits.get(key);
+    if (!h || h.count < this.max) return 0;
+    return Math.max(0, Math.ceil((h.start + this.windowMs - Date.now()) / 1000));
+  }
 }
 
 function parseCookies(header) {

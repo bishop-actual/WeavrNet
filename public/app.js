@@ -72,19 +72,31 @@ async function api(method, path, body) {
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
+      // WeavrNet never redirects its API. A redirect means something in front
+      // of it (a login proxy such as Authelia) intercepted the request.
+      redirect: 'manual',
     });
   } catch (_) {
-    throw Object.assign(new Error('No answer from the server. Check your connection and that WeavrNet is running.'), { kind: 'network' });
+    throw Object.assign(new Error(`No answer from ${location.host}. Check your connection and that WeavrNet is running.`), { kind: 'network' });
+  }
+  if (res.type === 'opaqueredirect') {
+    throw Object.assign(new Error('Your proxy redirected this request instead of passing it to WeavrNet — usually a login '
+      + 'middleware (e.g. Authelia) on this address. Leave WeavrNet out of it, or at least /api, /ws, /agent and /link.'), { kind: 'proxy', status: 302 });
   }
   noteInstance(res.headers.get('x-weavrnet-instance'));
   // Every WeavrNet response carries X-WeavrNet. Without it, something in
   // front of WeavrNet (Traefik, Authelia, Cloudflare…) answered instead.
   if (!res.headers.has('x-weavrnet')) {
+    const other = await res.clone().json().catch(() => null);
+    if (other && other.app === 'weavrnet') {
+      throw Object.assign(new Error('An older WeavrNet container answered this request, so two are running behind this '
+        + 'address. Remove the old one (docker ps -a | grep -i weavrnet).'), { kind: 'proxy', status: res.status });
+    }
     throw Object.assign(new Error(`WeavrNet didn't answer — your proxy replied instead (HTTP ${res.status}). `
       + 'WeavrNet may still be starting, or the proxy isn\'t sending this address to it.'), { kind: 'proxy', status: res.status });
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { kind: 'weavrnet', status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { kind: 'weavrnet', status: res.status, data });
   return data;
 }
 
@@ -134,6 +146,7 @@ function showWaiting(text) {
   $('#app').hidden = true;
   $('#auth').hidden = false;
   $('#authForm').hidden = true;
+  $('#resetForm').hidden = true;
   $('#authWaiting').hidden = false;
   $('#authSub').textContent = `Connecting to ${S.server?.name || 'WeavrNet'}…`;
   $('#authWaitingText').textContent = text;
@@ -144,7 +157,9 @@ function showAuth(setup) {
   $('#app').hidden = true;
   $('#auth').hidden = false;
   $('#authForm').hidden = false;
+  $('#resetForm').hidden = true;
   $('#authWaiting').hidden = true;
+  $('#forgotBtn').hidden = setup;
   $('#authSub').textContent = setup
     ? 'Welcome! Choose an admin password to finish setting up this WeavrNet server.'
     : `Sign in to ${S.server?.name || 'WeavrNet'} to control your Weavr devices from anywhere.`;
@@ -171,11 +186,58 @@ $('#authForm').addEventListener('submit', async (e) => {
     $('#authConfirm').value = '';
     startApp();
   } catch (ex) {
-    err.textContent = ex.kind === 'weavrnet' && ex.status === 401
-      ? 'Incorrect password. Forgotten it? Set WEAVRNET_ADMIN_PASSWORD on the container, restart it, and sign in with that.'
-      : ex.message;
+    if (ex.kind === 'weavrnet' && ex.status === 401) {
+      err.textContent = ex.data?.fromEnv
+        ? 'Incorrect password. This server takes its password from WEAVRNET_ADMIN_PASSWORD in its compose file — '
+          + 'check that value (a $ must be written as $$ there), or use “Forgot password?”.'
+        : 'Incorrect password. Use “Forgot password?” below if you’ve lost it.';
+    } else {
+      err.textContent = ex.message;
+    }
   } finally {
     $('#authSubmit').disabled = false;
+  }
+});
+
+// ── Forgotten password ──
+$('#forgotBtn').addEventListener('click', async () => {
+  const err = $('#authError');
+  err.textContent = '';
+  try {
+    await api('POST', '/api/reset/request', {});
+    $('#authForm').hidden = true;
+    $('#resetForm').hidden = false;
+    $('#authSub').textContent = 'Reset your admin password';
+    $('#resetError').textContent = '';
+    $('#resetCode').focus();
+  } catch (ex) {
+    err.textContent = ex.message;
+  }
+});
+
+$('#resetBack').addEventListener('click', () => showAuth(false));
+
+$('#resetForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = $('#resetError');
+  err.textContent = '';
+  const password = $('#resetPassword').value;
+  if (password.length < 8) { err.textContent = 'Use at least 8 characters.'; return; }
+  if (password !== $('#resetConfirm').value) { err.textContent = 'Passwords do not match.'; return; }
+  $('#resetSubmit').disabled = true;
+  try {
+    const r = await api('POST', '/api/reset/confirm', { code: $('#resetCode').value, password });
+    $('#resetCode').value = '';
+    $('#resetPassword').value = '';
+    $('#resetConfirm').value = '';
+    startApp();
+    if (r.fromEnv) {
+      toast('Password changed. Remove WEAVRNET_ADMIN_PASSWORD from your compose file, or it will replace this password on the next restart.', true, 12000);
+    }
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    $('#resetSubmit').disabled = false;
   }
 });
 
@@ -1261,13 +1323,13 @@ async function openServerSheet() {
 // UTILS
 // ═══════════════════════════════════════════════════════════════
 let toastTimer;
-function toast(msg, isError = false) {
+function toast(msg, isError = false, ms = 2600) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.toggle('error', !!isError);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 // Keep "seen 5m ago" labels fresh.

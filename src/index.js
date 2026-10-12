@@ -13,7 +13,7 @@ const { load } = require('./config');
 const { Store } = require('./store');
 const { Hub, PROTOCOL } = require('./hub');
 const {
-  SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies,
+  SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies, safeEqual,
 } = require('./auth');
 const { version } = require('../package.json');
 const { TOKEN_RE } = require('./link');
@@ -57,6 +57,12 @@ function createServer(config = load(), { log = console } = {}) {
   sessions.prune();
 
   const setupRequired = () => !store.data.admin.passwordHash;
+
+  // Forgotten password: a one-time code written to the container log, so
+  // whoever can run `docker logs` can get back in whatever the compose file says.
+  const RESET_TTL_MS = 15 * 60 * 1000;
+  const reset = { hash: null, expires: 0, attempts: 0, lastRequest: 0 };
+  const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
   const clientIp = (req) => {
     if (config.trustProxy) {
@@ -149,15 +155,61 @@ function createServer(config = load(), { log = console } = {}) {
 
       case 'POST /api/login': {
         const ip = clientIp(req);
-        if (throttle.blocked(ip)) return json(res, 429, { error: 'Too many attempts. Try again later.' });
+        if (throttle.blocked(ip)) {
+          const wait = throttle.retryAfter(ip);
+          return json(res, 429, {
+            error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60)} minute(s), or use “Forgot password?”.`,
+            retryAfterSeconds: wait,
+          });
+        }
         const { password } = await readBody(req);
         if (!verifyPassword(password, store.data.admin.passwordHash)) {
           throttle.fail(ip);
-          log.warn(`[auth] failed login from ${ip}`);
-          return json(res, 401, { error: 'Incorrect password' });
+          log.warn('[auth] failed sign-in (wrong password)');
+          // Says whether the compose file's WEAVRNET_ADMIN_PASSWORD decides the
+          // password, which is the usual reason a "right" password fails.
+          return json(res, 401, { error: 'Incorrect password', fromEnv: !!config.adminPassword });
         }
         throttle.reset(ip);
         return startSession(req, res, { ok: true });
+      }
+
+      case 'POST /api/reset/request': {
+        if (Date.now() - reset.lastRequest < 20 * 1000) {
+          return json(res, 429, { error: 'A code was just written to the log. Wait a few seconds before asking again.' });
+        }
+        reset.lastRequest = Date.now();
+        const code = String(crypto.randomInt(0, 100000000)).padStart(8, '0');
+        Object.assign(reset, { hash: sha256(code), expires: Date.now() + RESET_TTL_MS, attempts: 0 });
+        log.warn(`[auth] Password reset code: ${code.slice(0, 4)}-${code.slice(4)} `
+          + '(valid 15 minutes). Enter it on the WeavrNet sign-in page.');
+        return json(res, 200, { ok: true });
+      }
+
+      case 'POST /api/reset/confirm': {
+        const { code, password } = await readBody(req);
+        if (!reset.hash || Date.now() > reset.expires) {
+          return json(res, 400, { error: 'That code has expired. Ask for a new one.' });
+        }
+        if (reset.attempts >= 5) {
+          reset.hash = null;
+          return json(res, 429, { error: 'Too many wrong codes. Ask for a new one.' });
+        }
+        if (!safeEqual(sha256(String(code || '').replace(/\D/g, '')), reset.hash)) {
+          reset.attempts++;
+          return json(res, 401, { error: 'That code isn\'t right. Use the newest code in the log.' });
+        }
+        if (typeof password !== 'string' || password.length < 8) {
+          return json(res, 400, { error: 'Password must be at least 8 characters' });
+        }
+        reset.hash = null;
+        store.data.admin.passwordHash = hashPassword(password);
+        sessions.destroyAll();
+        hub.links.revokeAll();
+        throttle.hits.clear();
+        store.flush();
+        log.info('[auth] admin password reset with a code from the log');
+        return startSession(req, res, { ok: true, fromEnv: !!config.adminPassword });
       }
 
       case 'POST /api/logout':
