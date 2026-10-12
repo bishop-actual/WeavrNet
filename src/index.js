@@ -42,10 +42,22 @@ function createServer(config = load(), { log = console } = {}) {
   // Changes on every start. The web app uses it to spot two different
   // WeavrNet containers answering at the same address.
   const instance = crypto.randomBytes(6).toString('hex');
+  // Fingerprint of the web app's files. The page compares it with the
+  // server's whenever it connects and reloads itself after an update, so a
+  // home-screen app (which never reloads on its own) can't get stuck on an
+  // old version.
+  const assets = (() => {
+    const h = crypto.createHash('sha256');
+    for (const f of ['index.html', 'app.js', 'app.css']) {
+      try { h.update(fs.readFileSync(path.join(config.publicDir, f))); } catch (_) {}
+    }
+    return h.digest('hex').slice(0, 12);
+  })();
   const sessions = new Sessions(store, config.sessionDays);
   const throttle = new Throttle();
   const hub = new Hub({ store, config, log });
   hub.instance = instance;
+  hub.assets = assets;
 
   // An env-provided password always wins, so a lost password can be reset
   // by restarting the container with WEAVRNET_ADMIN_PASSWORD set.
@@ -137,7 +149,7 @@ function createServer(config = load(), { log = console } = {}) {
 
       case 'GET /api/status':
         return json(res, 200, {
-          app: 'weavrnet', version, instance, setupRequired: setupRequired(), authenticated: authed(req),
+          app: 'weavrnet', version, instance, assets, setupRequired: setupRequired(), authenticated: authed(req),
           server: hub.serverInfo(),
         });
 
@@ -252,9 +264,18 @@ function createServer(config = load(), { log = console } = {}) {
     if (!file.startsWith(config.publicDir + path.sep)) { res.writeHead(400); return res.end(); }
     fs.readFile(file, (err, buf) => {
       if (err) { res.writeHead(404, SECURITY_HEADERS); return res.end('Not found'); }
+      const page = path.basename(file) === 'index.html';
+      if (page) {
+        // Stamp the page with its version and version its script and styles,
+        // so no cache anywhere can pair a new page with old code or vice versa.
+        buf = Buffer.from(buf.toString()
+          .replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n<meta name="weavrnet-assets" content="${assets}">`)
+          .replace('href="/app.css"', `href="/app.css?v=${assets}"`)
+          .replace('src="/app.js"', `src="/app.js?v=${assets}"`));
+      }
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': page ? 'no-store' : 'no-cache',
         ...SECURITY_HEADERS,
       });
       res.end(req.method === 'HEAD' ? undefined : buf);
@@ -265,6 +286,7 @@ function createServer(config = load(), { log = console } = {}) {
     // Lets the web app tell WeavrNet's own answers from a proxy's error page.
     res.setHeader('X-WeavrNet', version);
     res.setHeader('X-WeavrNet-Instance', instance);
+    res.setHeader('X-WeavrNet-Assets', assets);
     const url = new URL(req.url, 'http://localhost');
     const link = url.pathname.match(/^\/link\/([^/]+)\/(.*)$/);
     if (link) {

@@ -100,6 +100,44 @@ async function api(method, path, body) {
   return data;
 }
 
+// ── Staying current ──
+// The page's own version, stamped in by the server. After an update the
+// server's differs, and the page reloads itself: home-screen apps never
+// reload on their own and would otherwise keep running old code.
+const PAGE_ASSETS = document.querySelector('meta[name="weavrnet-assets"]')?.content || null;
+
+function checkVersion(serverAssets) {
+  if (!PAGE_ASSETS || !serverAssets || serverAssets === PAGE_ASSETS) return false;
+  let tried = null;
+  try { tried = sessionStorage.getItem('weavrnet-reloaded-for'); } catch (_) {}
+  if (tried === serverAssets) {
+    // Already reloaded once for this version and still old: something is
+    // caching the page. Don't loop; say what to do instead.
+    const el = $('#globalNotice');
+    el.innerHTML = '<b>A newer version of WeavrNet is available.</b> Close this app completely and open it again '
+      + '(or reload the page) to load it.';
+    el.hidden = false;
+    return false;
+  }
+  try { sessionStorage.setItem('weavrnet-reloaded-for', serverAssets); } catch (_) {}
+  location.reload();
+  return true;
+}
+
+// Reopening a home-screen app (or a restored tab) doesn't reload the page,
+// so check in again whenever it comes back to the front.
+function onResume() {
+  if (document.visibilityState !== 'visible' || $('#app') === null) return;
+  if (!$('#authWaiting').hidden) { boot(); return; }
+  api('GET', '/api/status').then((st) => {
+    if (checkVersion(st.assets)) return;
+    if (!$('#app').hidden && !st.authenticated) { showAuth(st.setupRequired); return; }
+    if (!$('#app').hidden && (!S.ws || S.ws.readyState > 1)) connectWs();
+  }).catch(() => {});
+}
+document.addEventListener('visibilitychange', onResume);
+window.addEventListener('pageshow', (e) => { if (e.persisted) onResume(); });
+
 // ── Duplicate servers ──
 // Each WeavrNet process has its own id. A→B is a restart (an update); A→B→A
 // means two containers are answering at this address, which splits logins,
@@ -130,6 +168,7 @@ async function boot(attempt = 0) {
   clearTimeout(bootTimer);
   try {
     const st = await api('GET', '/api/status');
+    if (checkVersion(st.assets)) return;
     S.server = st.server;
     if (st.authenticated) return startApp();
     showAuth(st.setupRequired);
@@ -277,6 +316,7 @@ function connectWs() {
     // A closed socket may mean the session expired — check before retrying.
     try {
       const st = await api('GET', '/api/status');
+      if (checkVersion(st.assets)) return; // updated while we were away
       if (!st.authenticated) { showAuth(st.setupRequired); return; }
     } catch (_) {}
     const delay = Math.min(15000, 1000 * 2 ** S.wsAttempt++);
@@ -298,6 +338,8 @@ function setRelayStatus(s) {
 function onMessage(msg) {
   switch (msg.type) {
     case 'hello':
+      // A reconnect after an update brings a new version: pick it up.
+      if (checkVersion(msg.assets)) return;
       noteInstance(msg.instance);
       S.server = msg.server;
       S.devices = new Map(msg.devices.map((d) => [d.id, d]));

@@ -267,3 +267,18 @@ test('quotes left by Compose list syntax are stripped from env values', () => {
   assert.equal(cfg.serverName, 'Home');
   assert.equal(load({ WEAVRNET_ADMIN_PASSWORD: 'a"b' }).adminPassword, 'a"b');
 });
+
+test('the page is stamped with its version, never cached, and its code is versioned', async () => {
+  const res = await fetch(`http://${base}/`);
+  const html = await res.text();
+  const assets = res.headers.get('x-weavrnet-assets');
+  assert.match(assets, /^[0-9a-f]{12}$/);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.ok(html.includes(`<meta name="weavrnet-assets" content="${assets}">`));
+  assert.ok(html.includes(`src="/app.js?v=${assets}"`));
+  assert.ok(html.includes(`href="/app.css?v=${assets}"`));
+  const js = await fetch(`http://${base}/app.js?v=${assets}`);
+  assert.equal(js.status, 200);
+  assert.match(js.headers.get('content-type'), /javascript/);
+  assert.equal((await (await fetch(`http://${base}/api/status`)).json()).assets, assets);
+});
