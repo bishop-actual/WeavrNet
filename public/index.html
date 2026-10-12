@@ -15,7 +15,6 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div class="global-notice" id="globalNotice" hidden></div>
 
 <!-- Sign in / first-run setup -->
 <div id="auth" hidden>
@@ -27,21 +26,7 @@
     <input class="input" id="authConfirm" type="password" placeholder="Confirm password" autocomplete="new-password" hidden>
     <button class="btn block" id="authSubmit" type="submit">Sign in</button>
     <div class="form-error" id="authError"></div>
-    <button class="link-btn" id="forgotBtn" type="button">Forgot password?</button>
   </form>
-  <form class="auth-form" id="resetForm" autocomplete="off" hidden>
-    <div class="auth-help">A one-time code has been written to the WeavrNet container's log. On your server run
-      <code>docker logs --tail 5 weavrnet</code> (use your container's name) and enter the code below.</div>
-    <input class="input" id="resetCode" inputmode="numeric" placeholder="Code, e.g. 1234-5678" required>
-    <input class="input" id="resetPassword" type="password" placeholder="New password (8+ characters)" autocomplete="new-password" required>
-    <input class="input" id="resetConfirm" type="password" placeholder="Confirm new password" autocomplete="new-password" required>
-    <button class="btn block" id="resetSubmit" type="submit">Set new password</button>
-    <div class="form-error" id="resetError"></div>
-    <button class="link-btn" id="resetBack" type="button">Back to sign in</button>
-  </form>
-  <div class="auth-waiting" id="authWaiting" hidden>
-    <div class="scanning"><div class="pulse"></div><span id="authWaitingText"></span></div>
-  </div>
 </div>
 
 <!-- Main app -->

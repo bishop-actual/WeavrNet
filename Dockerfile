@@ -17,9 +17,7 @@ USER node
 VOLUME ["/data"]
 EXPOSE 7780
 
-# No HEALTHCHECK on purpose: Traefik stops routing to a container until its
-# health check passes, so after every restart WeavrNet answered 404 for a
-# while (and for good if the check ever failed). GET /api/health is there
-# for anyone who wants to add one in their own compose file.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1
 
 CMD ["node", "src/index.js"]

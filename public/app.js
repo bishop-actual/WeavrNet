@@ -44,8 +44,6 @@ const S = {
   isPlaying: false,
   settingsDirty: false,
   editingLocation: false,
-  mode: null,           // 'link' (the TV's own WeavrLink) or 'classic'
-  linkUrl: null,        // /link/<token>/ for the selected device
   requests: new Map(),  // requestId -> { label }
 };
 let positionTimer = null;
@@ -65,96 +63,15 @@ const safeColor = (c, fallback) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.t
 // API
 // ═══════════════════════════════════════════════════════════════
 async function api(method, path, body) {
-  let res;
-  try {
-    res = await fetch(path, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'same-origin',
-      // WeavrNet never redirects its API. A redirect means something in front
-      // of it (a login proxy such as Authelia) intercepted the request.
-      redirect: 'manual',
-    });
-  } catch (_) {
-    throw Object.assign(new Error(`No answer from ${location.host}. Check your connection and that WeavrNet is running.`), { kind: 'network' });
-  }
-  if (res.type === 'opaqueredirect') {
-    throw Object.assign(new Error('Your proxy redirected this request instead of passing it to WeavrNet — usually a login '
-      + 'middleware (e.g. Authelia) on this address. Leave WeavrNet out of it, or at least /api, /ws, /agent and /link.'), { kind: 'proxy', status: 302 });
-  }
-  noteInstance(res.headers.get('x-weavrnet-instance'));
-  // Every WeavrNet response carries X-WeavrNet. Without it, something in
-  // front of WeavrNet (Traefik, Authelia, Cloudflare…) answered instead.
-  if (!res.headers.has('x-weavrnet')) {
-    const other = await res.clone().json().catch(() => null);
-    if (other && other.app === 'weavrnet') {
-      throw Object.assign(new Error('An older WeavrNet container answered this request, so two are running behind this '
-        + 'address. Remove the old one (docker ps -a | grep -i weavrnet).'), { kind: 'proxy', status: res.status });
-    }
-    throw Object.assign(new Error(`WeavrNet didn't answer — your proxy replied instead (HTTP ${res.status}). `
-      + 'WeavrNet may still be starting, or the proxy isn\'t sending this address to it.'), { kind: 'proxy', status: res.status });
-  }
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: 'same-origin',
+  });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { kind: 'weavrnet', status: res.status, data });
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
   return data;
-}
-
-// ── Staying current ──
-// The page's own version, stamped in by the server. After an update the
-// server's differs, and the page reloads itself: home-screen apps never
-// reload on their own and would otherwise keep running old code.
-const PAGE_ASSETS = document.querySelector('meta[name="weavrnet-assets"]')?.content || null;
-
-function checkVersion(serverAssets) {
-  if (!PAGE_ASSETS || !serverAssets || serverAssets === PAGE_ASSETS) return false;
-  let tried = null;
-  try { tried = sessionStorage.getItem('weavrnet-reloaded-for'); } catch (_) {}
-  if (tried === serverAssets) {
-    // Already reloaded once for this version and still old: something is
-    // caching the page. Don't loop; say what to do instead.
-    const el = $('#globalNotice');
-    el.innerHTML = '<b>A newer version of WeavrNet is available.</b> Close this app completely and open it again '
-      + '(or reload the page) to load it.';
-    el.hidden = false;
-    return false;
-  }
-  try { sessionStorage.setItem('weavrnet-reloaded-for', serverAssets); } catch (_) {}
-  location.reload();
-  return true;
-}
-
-// Reopening a home-screen app (or a restored tab) doesn't reload the page,
-// so check in again whenever it comes back to the front.
-function onResume() {
-  if (document.visibilityState !== 'visible' || $('#app') === null) return;
-  if (!$('#authWaiting').hidden) { boot(); return; }
-  api('GET', '/api/status').then((st) => {
-    if (checkVersion(st.assets)) return;
-    if (!$('#app').hidden && !st.authenticated) { showAuth(st.setupRequired); return; }
-    if (!$('#app').hidden && (!S.ws || S.ws.readyState > 1)) connectWs();
-  }).catch(() => {});
-}
-document.addEventListener('visibilitychange', onResume);
-window.addEventListener('pageshow', (e) => { if (e.persisted) onResume(); });
-
-// ── Duplicate servers ──
-// Each WeavrNet process has its own id. A→B is a restart (an update); A→B→A
-// means two containers are answering at this address, which splits logins,
-// sessions and devices between them.
-const seenInstances = [];
-function noteInstance(id) {
-  if (!id || seenInstances[seenInstances.length - 1] === id) return;
-  seenInstances.push(id);
-  if (seenInstances.length > 6) seenInstances.shift();
-  const n = seenInstances.length;
-  if (n >= 3 && seenInstances[n - 1] === seenInstances[n - 3]) {
-    const el = $('#globalNotice');
-    el.innerHTML = '<b>Two WeavrNet servers are answering at this address.</b> Usually an old container is still '
-      + 'running next to the new one, so sign-ins and devices get split between them. On the server run '
-      + '<code>docker ps -a | grep -i weavrnet</code> and remove the extra container.';
-    el.hidden = false;
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -162,43 +79,22 @@ function noteInstance(id) {
 // ═══════════════════════════════════════════════════════════════
 let setupMode = false;
 
-let bootTimer = null;
-
-async function boot(attempt = 0) {
-  clearTimeout(bootTimer);
+async function boot() {
   try {
     const st = await api('GET', '/api/status');
-    if (checkVersion(st.assets)) return;
     S.server = st.server;
     if (st.authenticated) return startApp();
     showAuth(st.setupRequired);
   } catch (e) {
-    // Don't drop to a sign-in form that can't work: say what's wrong and
-    // keep trying (e.g. while the container restarts after an update).
-    const wait = Math.min(10, 2 ** attempt);
-    showWaiting(`${e.message} Trying again in ${wait}s…`);
-    bootTimer = setTimeout(() => boot(attempt + 1), wait * 1000);
+    showAuth(false);
+    $('#authError').textContent = 'Cannot reach the WeavrNet server.';
   }
-}
-
-function showWaiting(text) {
-  $('#app').hidden = true;
-  $('#auth').hidden = false;
-  $('#authForm').hidden = true;
-  $('#resetForm').hidden = true;
-  $('#authWaiting').hidden = false;
-  $('#authSub').textContent = `Connecting to ${S.server?.name || 'WeavrNet'}…`;
-  $('#authWaitingText').textContent = text;
 }
 
 function showAuth(setup) {
   setupMode = setup;
   $('#app').hidden = true;
   $('#auth').hidden = false;
-  $('#authForm').hidden = false;
-  $('#resetForm').hidden = true;
-  $('#authWaiting').hidden = true;
-  $('#forgotBtn').hidden = setup;
   $('#authSub').textContent = setup
     ? 'Welcome! Choose an admin password to finish setting up this WeavrNet server.'
     : `Sign in to ${S.server?.name || 'WeavrNet'} to control your Weavr devices from anywhere.`;
@@ -225,58 +121,9 @@ $('#authForm').addEventListener('submit', async (e) => {
     $('#authConfirm').value = '';
     startApp();
   } catch (ex) {
-    if (ex.kind === 'weavrnet' && ex.status === 401) {
-      err.textContent = ex.data?.fromEnv
-        ? 'Incorrect password. This server takes its password from WEAVRNET_ADMIN_PASSWORD in its compose file — '
-          + 'check that value (a $ must be written as $$ there), or use “Forgot password?”.'
-        : 'Incorrect password. Use “Forgot password?” below if you’ve lost it.';
-    } else {
-      err.textContent = ex.message;
-    }
+    err.textContent = ex.message;
   } finally {
     $('#authSubmit').disabled = false;
-  }
-});
-
-// ── Forgotten password ──
-$('#forgotBtn').addEventListener('click', async () => {
-  const err = $('#authError');
-  err.textContent = '';
-  try {
-    await api('POST', '/api/reset/request', {});
-    $('#authForm').hidden = true;
-    $('#resetForm').hidden = false;
-    $('#authSub').textContent = 'Reset your admin password';
-    $('#resetError').textContent = '';
-    $('#resetCode').focus();
-  } catch (ex) {
-    err.textContent = ex.message;
-  }
-});
-
-$('#resetBack').addEventListener('click', () => showAuth(false));
-
-$('#resetForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const err = $('#resetError');
-  err.textContent = '';
-  const password = $('#resetPassword').value;
-  if (password.length < 8) { err.textContent = 'Use at least 8 characters.'; return; }
-  if (password !== $('#resetConfirm').value) { err.textContent = 'Passwords do not match.'; return; }
-  $('#resetSubmit').disabled = true;
-  try {
-    const r = await api('POST', '/api/reset/confirm', { code: $('#resetCode').value, password });
-    $('#resetCode').value = '';
-    $('#resetPassword').value = '';
-    $('#resetConfirm').value = '';
-    startApp();
-    if (r.fromEnv) {
-      toast('Password changed. Remove WEAVRNET_ADMIN_PASSWORD from your compose file, or it will replace this password on the next restart.', true, 12000);
-    }
-  } catch (ex) {
-    err.textContent = ex.message;
-  } finally {
-    $('#resetSubmit').disabled = false;
   }
 });
 
@@ -316,7 +163,6 @@ function connectWs() {
     // A closed socket may mean the session expired — check before retrying.
     try {
       const st = await api('GET', '/api/status');
-      if (checkVersion(st.assets)) return; // updated while we were away
       if (!st.authenticated) { showAuth(st.setupRequired); return; }
     } catch (_) {}
     const delay = Math.min(15000, 1000 * 2 ** S.wsAttempt++);
@@ -338,9 +184,6 @@ function setRelayStatus(s) {
 function onMessage(msg) {
   switch (msg.type) {
     case 'hello':
-      // A reconnect after an update brings a new version: pick it up.
-      if (checkVersion(msg.assets)) return;
-      noteInstance(msg.instance);
       S.server = msg.server;
       S.devices = new Map(msg.devices.map((d) => [d.id, d]));
       renderServer();
@@ -355,28 +198,9 @@ function onMessage(msg) {
       S.devices.set(msg.device.id, msg.device);
       renderDeviceList();
       if (msg.device.id === S.selected) {
-        const was = S.wasOnline;
-        S.wasOnline = msg.device.online;
-        if (modeFor(msg.device) !== S.mode) { renderDashboard(); break; }
-        if (S.mode === 'link') {
-          renderHeader();
-          // Back online: start WeavrLink afresh, since its calls failed while away.
-          if (msg.device.online && !was) { S.linkUrl = null; requestLink(); }
-          renderLinkOverlay();
-          break;
-        }
         if (!msg.device.online) { S.playback = null; S.config = undefined; renderPlayback(); renderTab(); }
         renderHeader();
       }
-      break;
-    case 'link':
-      if (msg.deviceId !== S.selected || S.mode !== 'link') return;
-      S.linkUrl = msg.url;
-      $('#linkFrame').src = msg.url;
-      renderLinkOverlay();
-      break;
-    case 'notice':
-      if (msg.deviceId === S.selected && S.mode !== 'link') toast(msg.data?.text || '', msg.data?.ok === false);
       break;
     case 'device.removed':
       S.devices.delete(msg.deviceId);
@@ -411,8 +235,6 @@ function onMessage(msg) {
     }
     case 'error':
       if (msg.requestId) S.requests.delete(msg.requestId);
-      if (S.mode === 'link' && msg.deviceId === S.selected && !S.linkUrl) S.linkError = msg.error;
-      renderLinkOverlay();
       toast(msg.error, true);
       break;
     default:
@@ -434,10 +256,6 @@ function route() {
   S.playback = null;
   S.config = undefined;
   S.editingLocation = false;
-  S.mode = null;
-  S.linkUrl = null;
-  S.linkError = null;
-  S.wasOnline = !!S.devices.get(id)?.online;
   clearInterval(positionTimer);
   clearInterval(uptimeTimer);
   $('#app').classList.toggle('show-detail', !!id);
@@ -569,36 +387,8 @@ function renderDeviceList() {
 // ═══════════════════════════════════════════════════════════════
 const TABS = [['sources', 'Sources'], ['diagnostics', 'Diagnostics'], ['remote', 'Remote'], ['settings', 'Settings'], ['device', 'Device']];
 
-// A TV running a Weavr build with the WeavrLink tunnel shows its own
-// WeavrLink — every screen and setting, exactly as on the LAN. Older builds
-// get the basic remote below.
-function modeFor(d) {
-  return d && d.link && d.status === 'approved' ? 'link' : 'classic';
-}
-
-function requestLink() {
-  const d = selectedDevice();
-  if (!d?.online || S.linkUrl) return;
-  S.linkError = null;
-  wsSend({ type: 'link.open', deviceId: d.id });
-}
-
-function renderLinkOverlay() {
-  const el = $('#linkOverlay');
-  if (!el) return;
-  const d = selectedDevice();
-  let text = '';
-  if (!d?.online) text = `<div style="font-size:40px;opacity:.5">📺</div><div><b>${esc(d?.name || 'The TV')} is offline</b></div>
-    <div class="card-sub">WeavrLink comes back here as soon as Weavr reconnects to ${esc(S.server?.name || 'WeavrNet')}.</div>`;
-  else if (S.linkError) text = `<div><b>Couldn't open WeavrLink</b></div><div class="card-sub">${esc(S.linkError)}</div>
-    <button class="btn sm mt" data-action="retry-link">Try again</button>`;
-  else if (!S.linkUrl) text = '<div class="scanning"><div class="pulse"></div>Opening WeavrLink…</div>';
-  el.innerHTML = text;
-  el.hidden = !text;
-}
-
-function headerHtml() {
-  return `
+function renderDashboard() {
+  $('#dashboard').innerHTML = `
     <div class="comp-header">
       <button class="back-btn" data-action="back" aria-label="Back">‹</button>
       <div id="compIcon" class="device-icon" style="width:38px;height:38px;font-size:18px">📺</div>
@@ -608,28 +398,8 @@ function headerHtml() {
         <div class="comp-device-status"><span class="conn-dot connecting" id="compDot"></span><span id="compStatus">Connecting…</span></div>
       </div>
       <div class="short-code" id="compCode"></div>
-      <button class="icon-btn" data-action="device-info" title="Device details" aria-label="Device details">ⓘ</button>
     </div>
-    <div id="compBanner"></div>`;
-}
-
-function renderDashboard() {
-  const d = selectedDevice();
-  S.mode = modeFor(d);
-  $('#dashboard').classList.toggle('link-mode', S.mode === 'link');
-  if (S.mode === 'link') {
-    $('#dashboard').innerHTML = `${headerHtml()}
-      <div class="link-wrap">
-        <iframe id="linkFrame" title="WeavrLink" referrerpolicy="no-referrer"
-          sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"></iframe>
-        <div class="link-overlay" id="linkOverlay" hidden></div>
-      </div>`;
-    renderHeader();
-    renderLinkOverlay();
-    requestLink();
-    return;
-  }
-  $('#dashboard').innerHTML = `${headerHtml()}
+    <div id="compBanner"></div>
 
     <div class="now-playing">
       <div class="np-backdrop">
@@ -697,10 +467,8 @@ function renderHeader() {
   } else if (d.status === 'blocked') {
     banner = `<div class="banner"><span class="grow">This device is blocked and cannot connect.</span>
       <button class="btn sm ghost" data-action="unblock" data-id="${esc(d.id)}">Unblock</button></div>`;
-  } else if (!d.online && S.mode !== 'link') {
+  } else if (!d.online) {
     banner = '<div class="banner info"><span class="grow">The device is offline. Controls return when Weavr reconnects to the relay.</span></div>';
-  } else if (S.mode === 'classic' && d.online && !d.link) {
-    banner = '<div class="banner info"><span class="grow">Update Weavr on this TV to get the full WeavrLink here — every screen and setting.</span></div>';
   }
   $('#compBanner').innerHTML = banner;
   const usable = d.status === 'approved' && d.online;
@@ -1013,14 +781,10 @@ function locationEditorHtml(value) {
 // ── Device admin tab ──
 
 function deviceAdminHtml() {
-  return `<div class="tab-panel"><div class="section">${deviceCardsHtml()}</div></div>`;
-}
-
-function deviceCardsHtml() {
   const d = selectedDevice();
   if (!d) return '';
   const remote = d.remoteEdit === true ? 'Allowed' : d.remoteEdit === false ? 'Turned off on device' : '—';
-  return `
+  return `<div class="tab-panel"><div class="section">
     <div class="card">
       <div class="card-title">Device</div>
       <dl class="kv mt">
@@ -1047,7 +811,8 @@ function deviceCardsHtml() {
       <div class="card-title">Remove</div>
       <div class="card-sub">Forget this device. Weavr shows “Removed by admin” and stops reconnecting until someone on the TV re-enables WeavrNet.</div>
       <button class="btn danger block mt" data-action="remove" data-id="${esc(d.id)}">Remove device</button>
-    </div>`;
+    </div>
+  </div></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1095,15 +860,11 @@ const actions = {
     const d = S.devices.get(el.dataset.id);
     if (confirmAction(`Block ${d?.name || 'this device'}? It will be disconnected and refused until unblocked.`)) {
       wsSend({ type: 'device.block', deviceId: el.dataset.id });
-      closeSheet();
     }
   },
   remove: (el) => {
     const d = S.devices.get(el.dataset.id);
-    if (confirmAction(`Remove ${d?.name || 'this device'} from WeavrNet?`)) {
-      wsSend({ type: 'device.remove', deviceId: el.dataset.id });
-      closeSheet();
-    }
+    if (confirmAction(`Remove ${d?.name || 'this device'} from WeavrNet?`)) wsSend({ type: 'device.remove', deviceId: el.dataset.id });
   },
   'preset-name': (el) => { $('#cfgName').value = el.dataset.name; },
   'edit-location': () => {
@@ -1153,8 +914,6 @@ const actions = {
     if (confirmAction('Clear this key on the device?')) sendPatch({ settings: { [el.dataset.key]: '' } }, 'Key cleared');
   },
   'open-server': () => openServerSheet(),
-  'device-info': () => openDeviceSheet(),
-  'retry-link': () => { S.linkUrl = null; S.linkError = null; renderLinkOverlay(); requestLink(); },
   'close-sheet': () => closeSheet(),
   'gen-join-key': () => {
     const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -1282,27 +1041,6 @@ function openSourceSheet(type, src) {
   });
 }
 
-function openDeviceSheet() {
-  const d = selectedDevice();
-  if (!d) return;
-  const canEdit = d.online && d.status === 'approved' && d.remoteEdit !== false;
-  const body = `
-    <div class="card">
-      <label class="label" for="devLocation">Location nickname</label>
-      <div class="row">
-        <input class="input grow" id="devLocation" maxlength="40" value="${esc(d.location || '')}" placeholder="e.g. Dad's house" ${canEdit ? '' : 'disabled'}>
-        <button class="btn" type="submit" ${canEdit ? '' : 'disabled'}>Save</button>
-      </div>
-      <div class="card-sub">${canEdit ? 'Groups devices in WeavrNet. Leave empty to remove.' : 'Can be changed while the TV is online and allows remote changes.'}</div>
-    </div>
-    ${deviceCardsHtml()}`;
-  openSheet(d.name, body, () => {
-    const locationName = $('#devLocation').value.trim();
-    sendPatch({ locationName }, locationName ? 'Location updated' : 'Location cleared');
-    closeSheet();
-  });
-}
-
 async function openServerSheet() {
   let st;
   try { st = await api('GET', '/api/settings'); } catch (e) { toast(e.message, true); return; }
@@ -1365,13 +1103,13 @@ async function openServerSheet() {
 // UTILS
 // ═══════════════════════════════════════════════════════════════
 let toastTimer;
-function toast(msg, isError = false, ms = 2600) {
+function toast(msg, isError = false) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.toggle('error', !!isError);
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
 // Keep "seen 5m ago" labels fresh.

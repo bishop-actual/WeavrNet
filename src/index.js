@@ -2,7 +2,6 @@
 // WeavrNet entry point: HTTP API + static web app + the two WebSocket
 // endpoints (/agent for Weavr devices, /ws for signed-in admin browsers).
 
-const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
@@ -13,10 +12,9 @@ const { load } = require('./config');
 const { Store } = require('./store');
 const { Hub, PROTOCOL } = require('./hub');
 const {
-  SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies, safeEqual,
+  SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies,
 } = require('./auth');
 const { version } = require('../package.json');
-const { TOKEN_RE } = require('./link');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -39,42 +37,19 @@ const SECURITY_HEADERS = {
 
 function createServer(config = load(), { log = console } = {}) {
   const store = new Store(config.dataDir);
-  // Changes on every start. The web app uses it to spot two different
-  // WeavrNet containers answering at the same address.
-  const instance = crypto.randomBytes(6).toString('hex');
-  // Fingerprint of the web app's files. The page compares it with the
-  // server's whenever it connects and reloads itself after an update, so a
-  // home-screen app (which never reloads on its own) can't get stuck on an
-  // old version.
-  const assets = (() => {
-    const h = crypto.createHash('sha256');
-    for (const f of ['index.html', 'app.js', 'app.css']) {
-      try { h.update(fs.readFileSync(path.join(config.publicDir, f))); } catch (_) {}
-    }
-    return h.digest('hex').slice(0, 12);
-  })();
   const sessions = new Sessions(store, config.sessionDays);
   const throttle = new Throttle();
   const hub = new Hub({ store, config, log });
-  hub.instance = instance;
-  hub.assets = assets;
 
   // An env-provided password always wins, so a lost password can be reset
   // by restarting the container with WEAVRNET_ADMIN_PASSWORD set.
   if (config.adminPassword && !verifyPassword(config.adminPassword, store.data.admin.passwordHash)) {
     store.data.admin.passwordHash = hashPassword(config.adminPassword);
     store.flush();
-    log.info(`[auth] admin password set from WEAVRNET_ADMIN_PASSWORD (${config.adminPassword.length} characters)`);
   }
   sessions.prune();
 
   const setupRequired = () => !store.data.admin.passwordHash;
-
-  // Forgotten password: a one-time code written to the container log, so
-  // whoever can run `docker logs` can get back in whatever the compose file says.
-  const RESET_TTL_MS = 15 * 60 * 1000;
-  const reset = { hash: null, expires: 0, attempts: 0, lastRequest: 0 };
-  const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
   const clientIp = (req) => {
     if (config.trustProxy) {
@@ -149,7 +124,7 @@ function createServer(config = load(), { log = console } = {}) {
 
       case 'GET /api/status':
         return json(res, 200, {
-          app: 'weavrnet', version, instance, assets, setupRequired: setupRequired(), authenticated: authed(req),
+          app: 'weavrnet', version, setupRequired: setupRequired(), authenticated: authed(req),
           server: hub.serverInfo(),
         });
 
@@ -167,61 +142,15 @@ function createServer(config = load(), { log = console } = {}) {
 
       case 'POST /api/login': {
         const ip = clientIp(req);
-        if (throttle.blocked(ip)) {
-          const wait = throttle.retryAfter(ip);
-          return json(res, 429, {
-            error: `Too many wrong passwords. Try again in ${Math.ceil(wait / 60)} minute(s), or use “Forgot password?”.`,
-            retryAfterSeconds: wait,
-          });
-        }
+        if (throttle.blocked(ip)) return json(res, 429, { error: 'Too many attempts. Try again later.' });
         const { password } = await readBody(req);
         if (!verifyPassword(password, store.data.admin.passwordHash)) {
           throttle.fail(ip);
-          log.warn('[auth] failed sign-in (wrong password)');
-          // Says whether the compose file's WEAVRNET_ADMIN_PASSWORD decides the
-          // password, which is the usual reason a "right" password fails.
-          return json(res, 401, { error: 'Incorrect password', fromEnv: !!config.adminPassword });
+          log.warn(`[auth] failed login from ${ip}`);
+          return json(res, 401, { error: 'Incorrect password' });
         }
         throttle.reset(ip);
         return startSession(req, res, { ok: true });
-      }
-
-      case 'POST /api/reset/request': {
-        if (Date.now() - reset.lastRequest < 20 * 1000) {
-          return json(res, 429, { error: 'A code was just written to the log. Wait a few seconds before asking again.' });
-        }
-        reset.lastRequest = Date.now();
-        const code = String(crypto.randomInt(0, 100000000)).padStart(8, '0');
-        Object.assign(reset, { hash: sha256(code), expires: Date.now() + RESET_TTL_MS, attempts: 0 });
-        log.warn(`[auth] Password reset code: ${code.slice(0, 4)}-${code.slice(4)} `
-          + '(valid 15 minutes). Enter it on the WeavrNet sign-in page.');
-        return json(res, 200, { ok: true });
-      }
-
-      case 'POST /api/reset/confirm': {
-        const { code, password } = await readBody(req);
-        if (!reset.hash || Date.now() > reset.expires) {
-          return json(res, 400, { error: 'That code has expired. Ask for a new one.' });
-        }
-        if (reset.attempts >= 5) {
-          reset.hash = null;
-          return json(res, 429, { error: 'Too many wrong codes. Ask for a new one.' });
-        }
-        if (!safeEqual(sha256(String(code || '').replace(/\D/g, '')), reset.hash)) {
-          reset.attempts++;
-          return json(res, 401, { error: 'That code isn\'t right. Use the newest code in the log.' });
-        }
-        if (typeof password !== 'string' || password.length < 8) {
-          return json(res, 400, { error: 'Password must be at least 8 characters' });
-        }
-        reset.hash = null;
-        store.data.admin.passwordHash = hashPassword(password);
-        sessions.destroyAll();
-        hub.links.revokeAll();
-        throttle.hits.clear();
-        store.flush();
-        log.info('[auth] admin password reset with a code from the log');
-        return startSession(req, res, { ok: true, fromEnv: !!config.adminPassword });
       }
 
       case 'POST /api/logout':
@@ -248,7 +177,6 @@ function createServer(config = load(), { log = console } = {}) {
         if (typeof next !== 'string' || next.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters' });
         store.data.admin.passwordHash = hashPassword(next);
         sessions.destroyAll();
-        hub.links.revokeAll();
         store.flush();
         return startSession(req, res, { ok: true });
       }
@@ -264,18 +192,9 @@ function createServer(config = load(), { log = console } = {}) {
     if (!file.startsWith(config.publicDir + path.sep)) { res.writeHead(400); return res.end(); }
     fs.readFile(file, (err, buf) => {
       if (err) { res.writeHead(404, SECURITY_HEADERS); return res.end('Not found'); }
-      const page = path.basename(file) === 'index.html';
-      if (page) {
-        // Stamp the page with its version and version its script and styles,
-        // so no cache anywhere can pair a new page with old code or vice versa.
-        buf = Buffer.from(buf.toString()
-          .replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n<meta name="weavrnet-assets" content="${assets}">`)
-          .replace('href="/app.css"', `href="/app.css?v=${assets}"`)
-          .replace('src="/app.js"', `src="/app.js?v=${assets}"`));
-      }
       res.writeHead(200, {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': page ? 'no-store' : 'no-cache',
+        'Cache-Control': 'no-cache',
         ...SECURITY_HEADERS,
       });
       res.end(req.method === 'HEAD' ? undefined : buf);
@@ -283,19 +202,7 @@ function createServer(config = load(), { log = console } = {}) {
   }
 
   const handler = (req, res) => {
-    // Lets the web app tell WeavrNet's own answers from a proxy's error page.
-    res.setHeader('X-WeavrNet', version);
-    res.setHeader('X-WeavrNet-Instance', instance);
-    res.setHeader('X-WeavrNet-Assets', assets);
     const url = new URL(req.url, 'http://localhost');
-    const link = url.pathname.match(/^\/link\/([^/]+)\/(.*)$/);
-    if (link) {
-      hub.links.http(req, res, link[1], link[2] + url.search).catch((e) => {
-        log.error(e);
-        if (!res.headersSent) { res.writeHead(500); res.end(); }
-      });
-      return;
-    }
     if (url.pathname.startsWith('/api/')) {
       api(req, res, url).catch((e) => {
         if (!e.status) log.error(e);
@@ -311,9 +218,8 @@ function createServer(config = load(), { log = console } = {}) {
     ? https.createServer({ cert: fs.readFileSync(config.tlsCert), key: fs.readFileSync(config.tlsKey) }, handler)
     : http.createServer(handler);
 
-  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const uiWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
-  const linkWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url, 'http://localhost');
@@ -321,17 +227,6 @@ function createServer(config = load(), { log = console } = {}) {
       socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
     };
-    const link = pathname.match(/^\/link\/([^/]+)\/(.*)$/);
-    if (link) {
-      // Authorised by the token alone: the sandboxed page has an opaque
-      // origin (Origin: null) and no cookies.
-      const deviceId = TOKEN_RE.test(link[1]) ? hub.links.resolve(link[1]) : null;
-      if (!deviceId) return refuse(404, 'Not Found');
-      if (!hub.links.available(deviceId)) return refuse(503, 'Service Unavailable');
-      const search = new URL(req.url, 'http://localhost').search;
-      linkWss.handleUpgrade(req, socket, head, (ws) => hub.links.socket(ws, deviceId, link[2] + search));
-      return;
-    }
     if (pathname === '/agent') {
       agentWss.handleUpgrade(req, socket, head, (ws) => hub.attachAgent(ws, clientIp(req)));
     } else if (pathname === '/ws') {

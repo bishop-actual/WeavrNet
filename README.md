@@ -112,26 +112,7 @@ Each device dashboard has:
 | **Diagnostics** | Buffer health, bitrate, resolution, codec, reconnects, failover history, stream URL |
 | **Remote** | Stop, refresh, ±30 s, volume |
 | **Settings** | Remote editing: location nickname, room name, icon and background; add, edit, enable or remove M3U and Xtream sources; general toggles; metadata API keys |
-| **Device** | Status, platform and version, plus Approve, Block, Unblock and Remove |
-
-### WeavrLink, from anywhere
-
-On TVs running a Weavr build with WeavrNet's WeavrLink support, opening a
-device shows **that TV's own WeavrLink**, carried over the WeavrNet
-connection. That includes every screen and the full Settings: all source
-types, Request server, Home Lists, Sport Hub, Backup & transfer, General,
-Media and the rest. Adding a source behaves exactly as on the LAN: the TV
-shows its loading dialog and WeavrNet shows the progress and result.
-
-The ⓘ button in the header has the WeavrNet side: location nickname, device
-details, and approve / block / remove. Older Weavr builds get the basic
-remote described above.
-
-WeavrLink pages are served from private, expiring `/link/<token>/` URLs in a
-sandbox (an opaque origin), so whatever a TV sends can't read your WeavrNet
-login or call the admin API. **If you put Authelia (or any login proxy) in
-front of WeavrNet, exclude `/agent` and `/link/` from it.** TVs can't log in
-to it, and the sandboxed WeavrLink page doesn't carry its cookie.
+| **Device** | Status, platform, version and last address, plus Approve, Block, Unblock and Remove |
 
 ### Privacy controls on the TV
 
@@ -152,23 +133,6 @@ In Weavr's WeavrNet card:
   toggles WeavrNet off and on. It then registers as a new device.
 * **Block:** the device is disconnected and refused from then on, until it is
   unblocked.
-
-## Troubleshooting
-
-The web page tells you what's wrong instead of guessing:
-
-| Message | Meaning |
-|---|---|
-| *WeavrNet didn't answer — your proxy replied instead (HTTP 404/502/504)…* | Traefik (or Authelia, Cloudflare…) answered, not WeavrNet. Usually the container is restarting, which takes a few seconds. The page keeps retrying by itself. If it never clears, check the container is running (`docker ps`) and that your proxy sends this hostname to it. |
-| *Two WeavrNet servers are answering at this address* | Two containers share the same Traefik labels (often an old one left running after a change), so sign-ins and devices are split between them. Remove the extra one: `docker ps -a \| grep -i weavrnet`. |
-| *Your proxy redirected this request instead of passing it to WeavrNet* | A login middleware (e.g. Authelia) sits in front of WeavrNet's API. Remove it from WeavrNet's router, or at least exclude `/api`, `/ws`, `/agent` and `/link`. |
-| *An older WeavrNet container answered this request* | Two WeavrNet containers share this address; remove the old one. |
-| *Incorrect password* | WeavrNet itself rejected it. Use **Forgot password?** on the sign-in page: it writes a one-time code to the container log (`docker logs --tail 5 weavrnet`), and you enter it with a new password. If the message mentions `WEAVRNET_ADMIN_PASSWORD`, that compose value decides the password on every start — check it (write any `$` as `$$`) or remove it. |
-
-The image has no Docker `HEALTHCHECK` on purpose. Traefik won't route to a
-container until its health check passes, which made WeavrNet unreachable
-for up to a minute after every update. If you want one anyway, use
-`GET /api/health`.
 
 ## How the handshake works
 

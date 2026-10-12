@@ -8,13 +8,6 @@ function bool(v, fallback) {
   return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
 }
 
-/** `- KEY="value"` in a Compose list keeps the quotes; drop them. */
-function unquote(v) {
-  if (typeof v !== 'string') return v;
-  const t = v.trim();
-  return t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0] ? t.slice(1, -1) : t;
-}
-
 function load(env = process.env) {
   return {
     host: env.HOST || '0.0.0.0',
@@ -27,9 +20,9 @@ function load(env = process.env) {
     // Honour X-Forwarded-For / X-Forwarded-Proto from a reverse proxy.
     trustProxy: bool(env.TRUST_PROXY, false),
     // Values below override what the admin sets in the UI when present.
-    serverName: unquote(env.WEAVRNET_NAME) || null,
-    adminPassword: unquote(env.WEAVRNET_ADMIN_PASSWORD) || null,
-    joinKey: env.WEAVRNET_JOIN_KEY !== undefined ? unquote(env.WEAVRNET_JOIN_KEY) : null,
+    serverName: env.WEAVRNET_NAME || null,
+    adminPassword: env.WEAVRNET_ADMIN_PASSWORD || null,
+    joinKey: env.WEAVRNET_JOIN_KEY !== undefined ? env.WEAVRNET_JOIN_KEY : null,
     requireApproval: env.WEAVRNET_REQUIRE_APPROVAL !== undefined
       ? bool(env.WEAVRNET_REQUIRE_APPROVAL, false) : null,
     sessionDays: parseInt(env.WEAVRNET_SESSION_DAYS || '30', 10),
