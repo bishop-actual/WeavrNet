@@ -103,7 +103,11 @@ function parseCookies(header) {
   for (const part of (header || '').split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    const name = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
+    // Other apps on the same domain can leave cookies that aren't valid
+    // %-encoding. Those must never stop WeavrNet answering.
+    try { out[name] = decodeURIComponent(value); } catch (_) { out[name] = value; }
   }
   return out;
 }

@@ -165,6 +165,9 @@ class Hub {
 
   attachAgent(ws, ip) {
     const conn = { ws, ip, stage: 'hello', id: null, nonce: null, hello: null };
+    // ws reports bad or oversized frames as 'error'; unhandled, that would
+    // crash the server. The socket closes itself afterwards.
+    ws.on('error', (e) => this.log.warn(`[agent] ${conn.id || ip}: ${e.message}`));
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
@@ -387,6 +390,7 @@ class Hub {
   attachUi(ws) {
     const ui = { ws, deviceId: null };
     this.uis.add(ui);
+    ws.on('error', (e) => this.log.warn(`[ui] ${e.message}`));
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     send(ws, { type: 'hello', server: this.serverInfo(), devices: this.deviceList() });

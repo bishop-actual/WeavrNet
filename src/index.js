@@ -186,7 +186,11 @@ function createServer(config = load(), { log = console } = {}) {
   }
 
   function serveStatic(req, res, url) {
-    let rel = decodeURIComponent(url.pathname);
+    let rel;
+    try { rel = decodeURIComponent(url.pathname); } catch (_) {
+      res.writeHead(400, SECURITY_HEADERS);
+      return res.end('Bad request');
+    }
     if (rel === '/' || !path.extname(rel)) rel = '/index.html'; // SPA fallback
     const file = path.join(config.publicDir, path.normalize(rel));
     if (!file.startsWith(config.publicDir + path.sep)) { res.writeHead(400); return res.end(); }
@@ -202,16 +206,23 @@ function createServer(config = load(), { log = console } = {}) {
   }
 
   const handler = (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    if (url.pathname.startsWith('/api/')) {
-      api(req, res, url).catch((e) => {
-        if (!e.status) log.error(e);
-        if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : 'Server error' });
-      });
-      return;
+    // Nothing a browser or a bot sends may take the server down.
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      if (url.pathname.startsWith('/api/')) {
+        api(req, res, url).catch((e) => {
+          if (!e.status) log.error(e);
+          if (!res.headersSent) json(res, e.status || 500, { error: e.status ? e.message : 'Server error' });
+        });
+        return;
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
+      serveStatic(req, res, url);
+    } catch (e) {
+      log.error(e);
+      if (!res.headersSent) res.writeHead(400, SECURITY_HEADERS);
+      res.end();
     }
-    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
-    serveStatic(req, res, url);
   };
 
   const server = config.tlsCert && config.tlsKey
@@ -222,6 +233,15 @@ function createServer(config = load(), { log = console } = {}) {
   const uiWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
+    try {
+      upgrade(req, socket, head);
+    } catch (e) {
+      log.error(e);
+      socket.destroy();
+    }
+  });
+
+  function upgrade(req, socket, head) {
     const { pathname } = new URL(req.url, 'http://localhost');
     const refuse = (code, text) => {
       socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
@@ -236,7 +256,7 @@ function createServer(config = load(), { log = console } = {}) {
     } else {
       refuse(404, 'Not Found');
     }
-  });
+  }
 
   server.on('close', () => { hub.close(); store.flush(); });
 
