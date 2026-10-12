@@ -269,3 +269,10 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .link-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:8px;text-align:center;padding:24px;background:var(--bg)}
 @media (min-width:900px){#detail > .detail-inner.link-mode{max-width:none;height:100vh}}
+
+/* ── Connection problems ── */
+.auth-waiting{max-width:360px;text-align:center}
+.auth-waiting .scanning{justify-content:center;line-height:1.5}
+.global-notice{position:sticky;top:0;z-index:600;background:rgba(255,179,64,.15);border-bottom:1px solid rgba(255,179,64,.4);
+  color:var(--warn);padding:10px 16px;font-size:13px;line-height:1.5}
+.global-notice code{background:rgba(0,0,0,.25);padding:1px 5px;border-radius:4px;color:var(--text)}

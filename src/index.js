@@ -2,6 +2,7 @@
 // WeavrNet entry point: HTTP API + static web app + the two WebSocket
 // endpoints (/agent for Weavr devices, /ws for signed-in admin browsers).
 
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
@@ -38,15 +39,20 @@ const SECURITY_HEADERS = {
 
 function createServer(config = load(), { log = console } = {}) {
   const store = new Store(config.dataDir);
+  // Changes on every start. The web app uses it to spot two different
+  // WeavrNet containers answering at the same address.
+  const instance = crypto.randomBytes(6).toString('hex');
   const sessions = new Sessions(store, config.sessionDays);
   const throttle = new Throttle();
   const hub = new Hub({ store, config, log });
+  hub.instance = instance;
 
   // An env-provided password always wins, so a lost password can be reset
   // by restarting the container with WEAVRNET_ADMIN_PASSWORD set.
   if (config.adminPassword && !verifyPassword(config.adminPassword, store.data.admin.passwordHash)) {
     store.data.admin.passwordHash = hashPassword(config.adminPassword);
     store.flush();
+    log.info(`[auth] admin password set from WEAVRNET_ADMIN_PASSWORD (${config.adminPassword.length} characters)`);
   }
   sessions.prune();
 
@@ -125,7 +131,7 @@ function createServer(config = load(), { log = console } = {}) {
 
       case 'GET /api/status':
         return json(res, 200, {
-          app: 'weavrnet', version, setupRequired: setupRequired(), authenticated: authed(req),
+          app: 'weavrnet', version, instance, setupRequired: setupRequired(), authenticated: authed(req),
           server: hub.serverInfo(),
         });
 
@@ -204,6 +210,9 @@ function createServer(config = load(), { log = console } = {}) {
   }
 
   const handler = (req, res) => {
+    // Lets the web app tell WeavrNet's own answers from a proxy's error page.
+    res.setHeader('X-WeavrNet', version);
+    res.setHeader('X-WeavrNet-Instance', instance);
     const url = new URL(req.url, 'http://localhost');
     const link = url.pathname.match(/^\/link\/([^/]+)\/(.*)$/);
     if (link) {

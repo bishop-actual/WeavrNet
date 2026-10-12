@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<div class="global-notice" id="globalNotice" hidden></div>
 
 <!-- Sign in / first-run setup -->
 <div id="auth" hidden>
@@ -27,6 +28,9 @@
     <button class="btn block" id="authSubmit" type="submit">Sign in</button>
     <div class="form-error" id="authError"></div>
   </form>
+  <div class="auth-waiting" id="authWaiting" hidden>
+    <div class="scanning"><div class="pulse"></div><span id="authWaitingText"></span></div>
+  </div>
 </div>
 
 <!-- Main app -->

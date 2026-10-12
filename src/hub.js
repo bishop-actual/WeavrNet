@@ -408,7 +408,7 @@ class Hub {
     this.uis.add(ui);
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
-    send(ws, { type: 'hello', server: this.serverInfo(), devices: this.deviceList() });
+    send(ws, { type: 'hello', instance: this.instance, server: this.serverInfo(), devices: this.deviceList() });
 
     ws.on('message', (raw) => {
       const msg = parse(raw);

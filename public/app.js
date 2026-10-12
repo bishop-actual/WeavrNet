@@ -65,15 +65,46 @@ const safeColor = (c, fallback) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.t
 // API
 // ═══════════════════════════════════════════════════════════════
 async function api(method, path, body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+    });
+  } catch (_) {
+    throw Object.assign(new Error('No answer from the server. Check your connection and that WeavrNet is running.'), { kind: 'network' });
+  }
+  noteInstance(res.headers.get('x-weavrnet-instance'));
+  // Every WeavrNet response carries X-WeavrNet. Without it, something in
+  // front of WeavrNet (Traefik, Authelia, Cloudflare…) answered instead.
+  if (!res.headers.has('x-weavrnet')) {
+    throw Object.assign(new Error(`WeavrNet didn't answer — your proxy replied instead (HTTP ${res.status}). `
+      + 'WeavrNet may still be starting, or the proxy isn\'t sending this address to it.'), { kind: 'proxy', status: res.status });
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { kind: 'weavrnet', status: res.status });
   return data;
+}
+
+// ── Duplicate servers ──
+// Each WeavrNet process has its own id. A→B is a restart (an update); A→B→A
+// means two containers are answering at this address, which splits logins,
+// sessions and devices between them.
+const seenInstances = [];
+function noteInstance(id) {
+  if (!id || seenInstances[seenInstances.length - 1] === id) return;
+  seenInstances.push(id);
+  if (seenInstances.length > 6) seenInstances.shift();
+  const n = seenInstances.length;
+  if (n >= 3 && seenInstances[n - 1] === seenInstances[n - 3]) {
+    const el = $('#globalNotice');
+    el.innerHTML = '<b>Two WeavrNet servers are answering at this address.</b> Usually an old container is still '
+      + 'running next to the new one, so sign-ins and devices get split between them. On the server run '
+      + '<code>docker ps -a | grep -i weavrnet</code> and remove the extra container.';
+    el.hidden = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -81,22 +112,39 @@ async function api(method, path, body) {
 // ═══════════════════════════════════════════════════════════════
 let setupMode = false;
 
-async function boot() {
+let bootTimer = null;
+
+async function boot(attempt = 0) {
+  clearTimeout(bootTimer);
   try {
     const st = await api('GET', '/api/status');
     S.server = st.server;
     if (st.authenticated) return startApp();
     showAuth(st.setupRequired);
   } catch (e) {
-    showAuth(false);
-    $('#authError').textContent = 'Cannot reach the WeavrNet server.';
+    // Don't drop to a sign-in form that can't work: say what's wrong and
+    // keep trying (e.g. while the container restarts after an update).
+    const wait = Math.min(10, 2 ** attempt);
+    showWaiting(`${e.message} Trying again in ${wait}s…`);
+    bootTimer = setTimeout(() => boot(attempt + 1), wait * 1000);
   }
+}
+
+function showWaiting(text) {
+  $('#app').hidden = true;
+  $('#auth').hidden = false;
+  $('#authForm').hidden = true;
+  $('#authWaiting').hidden = false;
+  $('#authSub').textContent = `Connecting to ${S.server?.name || 'WeavrNet'}…`;
+  $('#authWaitingText').textContent = text;
 }
 
 function showAuth(setup) {
   setupMode = setup;
   $('#app').hidden = true;
   $('#auth').hidden = false;
+  $('#authForm').hidden = false;
+  $('#authWaiting').hidden = true;
   $('#authSub').textContent = setup
     ? 'Welcome! Choose an admin password to finish setting up this WeavrNet server.'
     : `Sign in to ${S.server?.name || 'WeavrNet'} to control your Weavr devices from anywhere.`;
@@ -123,7 +171,9 @@ $('#authForm').addEventListener('submit', async (e) => {
     $('#authConfirm').value = '';
     startApp();
   } catch (ex) {
-    err.textContent = ex.message;
+    err.textContent = ex.kind === 'weavrnet' && ex.status === 401
+      ? 'Incorrect password. Forgotten it? Set WEAVRNET_ADMIN_PASSWORD on the container, restart it, and sign in with that.'
+      : ex.message;
   } finally {
     $('#authSubmit').disabled = false;
   }
@@ -186,6 +236,7 @@ function setRelayStatus(s) {
 function onMessage(msg) {
   switch (msg.type) {
     case 'hello':
+      noteInstance(msg.instance);
       S.server = msg.server;
       S.devices = new Map(msg.devices.map((d) => [d.id, d]));
       renderServer();

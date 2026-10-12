@@ -153,6 +153,21 @@ In Weavr's WeavrNet card:
 * **Block:** the device is disconnected and refused from then on, until it is
   unblocked.
 
+## Troubleshooting
+
+The web page tells you what's wrong instead of guessing:
+
+| Message | Meaning |
+|---|---|
+| *WeavrNet didn't answer — your proxy replied instead (HTTP 404/502/504)…* | Traefik (or Authelia, Cloudflare…) answered, not WeavrNet. Usually the container is restarting, which takes a few seconds. The page keeps retrying by itself. If it never clears, check the container is running (`docker ps`) and that your proxy sends this hostname to it. |
+| *Two WeavrNet servers are answering at this address* | Two containers share the same Traefik labels (often an old one left running after a change), so sign-ins and devices are split between them. Remove the extra one: `docker ps -a \| grep -i weavrnet`. |
+| *Incorrect password* | WeavrNet itself rejected it. To reset, set `WEAVRNET_ADMIN_PASSWORD` on the container and restart it (quotes around the value are fine). |
+
+The image has no Docker `HEALTHCHECK` on purpose. Traefik won't route to a
+container until its health check passes, which made WeavrNet unreachable
+for up to a minute after every update. If you want one anyway, use
+`GET /api/health`.
+
 ## How the handshake works
 
 1. The TV opens a WebSocket to `/agent` and sends `hello` with its stable

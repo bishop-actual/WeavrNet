@@ -247,3 +247,23 @@ test('static files are served without path traversal', async () => {
   res = await fetch(`http://${base}/..%2fpackage.json`);
   assert.notEqual(res.status, 200);
 });
+
+test('every response is tagged as WeavrNet with a per-process instance id', async () => {
+  const st = await fetch(`http://${base}/api/status`);
+  const page = await fetch(`http://${base}/`);
+  const missing = await fetch(`http://${base}/api/nope`);
+  for (const r of [st, page, missing]) {
+    assert.ok(r.headers.get('x-weavrnet'), 'X-WeavrNet header');
+    assert.match(r.headers.get('x-weavrnet-instance'), /^[0-9a-f]{12}$/);
+  }
+  const body = await st.json();
+  assert.equal(body.instance, st.headers.get('x-weavrnet-instance'));
+});
+
+test('quotes left by Compose list syntax are stripped from env values', () => {
+  const cfg = load({ WEAVRNET_ADMIN_PASSWORD: '"my pass"', WEAVRNET_JOIN_KEY: "'ABC'", WEAVRNET_NAME: 'Home' });
+  assert.equal(cfg.adminPassword, 'my pass');
+  assert.equal(cfg.joinKey, 'ABC');
+  assert.equal(cfg.serverName, 'Home');
+  assert.equal(load({ WEAVRNET_ADMIN_PASSWORD: 'a"b' }).adminPassword, 'a"b');
+});
