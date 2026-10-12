@@ -15,6 +15,7 @@ const {
   SESSION_COOKIE, hashPassword, verifyPassword, Sessions, Throttle, parseCookies,
 } = require('./auth');
 const { version } = require('../package.json');
+const { TOKEN_RE } = require('./link');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -177,6 +178,7 @@ function createServer(config = load(), { log = console } = {}) {
         if (typeof next !== 'string' || next.length < 8) return json(res, 400, { error: 'Password must be at least 8 characters' });
         store.data.admin.passwordHash = hashPassword(next);
         sessions.destroyAll();
+        hub.links.revokeAll();
         store.flush();
         return startSession(req, res, { ok: true });
       }
@@ -209,6 +211,14 @@ function createServer(config = load(), { log = console } = {}) {
     // Nothing a browser or a bot sends may take the server down.
     try {
       const url = new URL(req.url, 'http://localhost');
+      const link = url.pathname.match(/^\/link\/([^/]+)\/(.*)$/);
+      if (link) {
+        hub.links.http(req, res, link[1], link[2] + url.search).catch((e) => {
+          log.error(e);
+          if (!res.headersSent) { res.writeHead(500); res.end(); } else res.end();
+        });
+        return;
+      }
       if (url.pathname.startsWith('/api/')) {
         api(req, res, url).catch((e) => {
           if (!e.status) log.error(e);
@@ -229,8 +239,9 @@ function createServer(config = load(), { log = console } = {}) {
     ? https.createServer({ cert: fs.readFileSync(config.tlsCert), key: fs.readFileSync(config.tlsKey) }, handler)
     : http.createServer(handler);
 
-  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const agentWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
   const uiWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+  const linkWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
     try {
@@ -247,6 +258,17 @@ function createServer(config = load(), { log = console } = {}) {
       socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
     };
+    const link = pathname.match(/^\/link\/([^/]+)\/(.*)$/);
+    if (link) {
+      // Authorised by the token alone: the sandboxed page has an opaque
+      // origin (Origin: null) and no cookies.
+      const deviceId = TOKEN_RE.test(link[1]) ? hub.links.resolve(link[1]) : null;
+      if (!deviceId) return refuse(404, 'Not Found');
+      if (!hub.links.available(deviceId)) return refuse(503, 'Service Unavailable');
+      const search = new URL(req.url, 'http://localhost').search;
+      linkWss.handleUpgrade(req, socket, head, (ws) => hub.links.socket(ws, deviceId, link[2] + search));
+      return;
+    }
     if (pathname === '/agent') {
       agentWss.handleUpgrade(req, socket, head, (ws) => hub.attachAgent(ws, clientIp(req)));
     } else if (pathname === '/ws') {

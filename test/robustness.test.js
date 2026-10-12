@@ -71,7 +71,7 @@ test('an oversized or broken message on /agent closes that socket only', async (
   const big = new WebSocket(`ws://127.0.0.1:${port}/agent`);
   await new Promise((r) => big.on('open', r));
   big.on('error', () => {});
-  big.send(Buffer.alloc(2 * 1024 * 1024, 97));
+  big.send(Buffer.alloc(5 * 1024 * 1024, 97)); // over the 4 MB device limit
   assert.equal(await new Promise((r) => big.on('close', r)), 1009);
 
   // An invalid frame (reserved opcode) straight onto the socket.
@@ -83,5 +83,22 @@ test('an oversized or broken message on /agent closes that socket only', async (
     s.on('close', resolve); s.on('error', resolve);
     setTimeout(() => s.destroy(), 1000);
   });
+  assert.ok(await alive());
+});
+
+test('malformed WeavrLink addresses and sockets are refused, not crashes', async () => {
+  for (const p of ['/link/%E0%A4%A/', `/link/${'a'.repeat(43)}/%E0%A4%A`, '/link//', '/link/x/../../api/status']) {
+    const res = await fetch(`http://127.0.0.1:${port}${p}`);
+    assert.ok(res.status < 500, `${p} → ${res.status}`);
+  }
+  for (const p of ['/link/garbage/ws', `/link/${'b'.repeat(43)}/ws`]) {
+    const code = await new Promise((resolve) => {
+      const w = new WebSocket(`ws://127.0.0.1:${port}${p}`);
+      w.on('unexpected-response', (_, r) => resolve(r.statusCode));
+      w.on('error', () => resolve('error'));
+      w.on('open', () => resolve('open'));
+    });
+    assert.equal(code, 404);
+  }
   assert.ok(await alive());
 });

@@ -112,7 +112,26 @@ Each device dashboard has:
 | **Diagnostics** | Buffer health, bitrate, resolution, codec, reconnects, failover history, stream URL |
 | **Remote** | Stop, refresh, ±30 s, volume |
 | **Settings** | Remote editing: location nickname, room name, icon and background; add, edit, enable or remove M3U and Xtream sources; general toggles; metadata API keys |
-| **Device** | Status, platform, version and last address, plus Approve, Block, Unblock and Remove |
+| **Device** | Status, platform and version, plus Approve, Block, Unblock and Remove |
+
+### WeavrLink, from anywhere
+
+On TVs running a Weavr build with WeavrNet's WeavrLink support, opening a
+device shows **that TV's own WeavrLink**, carried over the WeavrNet
+connection. That includes every screen and the full Settings: all source
+types, Request server, Home Lists, Sport Hub, Backup & transfer, General,
+Media and the rest. Adding a source behaves exactly as on the LAN: the TV
+shows its loading dialog and WeavrNet shows the progress and result.
+
+The ⓘ button in the header has the WeavrNet side: location nickname, device
+details, and approve / block / remove. Older Weavr builds get the basic
+remote described above.
+
+WeavrLink pages are served from private, expiring `/link/<token>/` URLs in a
+sandbox (an opaque origin), so whatever a TV sends can't read your WeavrNet
+login or call the admin API. **If you put Authelia (or any login proxy) in
+front of WeavrNet, exclude `/agent` and `/link/` from it.** TVs can't log in
+to it, and the sandboxed WeavrLink page doesn't carry its cookie.
 
 ### Privacy controls on the TV
 

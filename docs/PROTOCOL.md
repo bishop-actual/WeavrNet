@@ -92,6 +92,41 @@ Every field is optional:
 
 The device rejects anything outside this list.
 
+## WeavrLink tunnel
+
+Devices that list `"link"` in `hello.features` serve their WeavrLink web
+app through the relay.
+
+A signed-in admin asks for a session with `{type:"link.open", deviceId}` on
+`/ws` and gets `{type:"link", deviceId, url:"/link/<token>/?code=<connect code>"}`.
+Tokens expire after 12 h unused, and when the device is blocked or removed or
+the admin password changes. Everything under `/link/<token>/` is forwarded to
+the TV:
+
+| Direction | Message |
+|---|---|
+| relay → device | `{type:"http", id, method, path, headers:{content-type?, x-weavr-code?, accept?}, body: base64\|null, base:"/link/<token>"}` |
+| device → relay | `{type:"http.res", id, status, headers:{content-type?, cache-control?, content-disposition?}}` |
+| device → relay | `{type:"http.data", id, data: base64}` (≤ 192 KB each, any number) |
+| device → relay | `{type:"http.end", id}` |
+| relay → device | `{type:"ws.open", sid, path}` (browser opened `/link/<token>/<path>`) |
+| both ways | `{type:"ws.msg", sid, data: string}` |
+| both ways | `{type:"ws.close", sid}` |
+
+The device replays requests against its own companion server on 127.0.0.1,
+and rewrites absolute links in HTML responses to sit under `base`.
+Responses go out with `Content-Security-Policy: sandbox …; frame-ancestors 'self'`
+and `Access-Control-Allow-Origin: *`. The page runs in an opaque origin, and
+the token, not a cookie, authorises its requests. The relay answers CORS
+preflights itself.
+
+## Heartbeat
+
+The relay sends a protocol ping and an app-level `{type:"ping"}` to each
+device every 30 s. A device is dropped only after 150 s with nothing heard
+from it, so a TV busy with a large import doesn't flap offline. The Weavr
+client reconnects if it hears nothing from the relay for 150 s.
+
 ## Browser ↔ relay: `/ws`
 
 Needs a valid session cookie (`weavrnet_session`, HttpOnly, SameSite=Strict)
@@ -105,6 +140,8 @@ and a same-origin `Origin` header.
 | relay → ui | `{type:"state"\|"diagnostics"\|"config", deviceId, data}` (subscribed device only) |
 | ui → relay | `{type:"command", deviceId, command, ...args}` |
 | ui → relay | `{type:"config.update", deviceId, requestId, patch}` → `{type:"config.result", deviceId, requestId, ok, error}` |
+| ui → relay | `{type:"link.open", deviceId}` → `{type:"link", deviceId, url}` |
+| relay → ui | `{type:"notice", deviceId, data:{text, ok}}` (WeavrLink progress messages) |
 | ui → relay | `{type:"device.approve"\|"device.block"\|"device.unblock"\|"device.remove", deviceId}` |
 | relay → ui | `{type:"error", deviceId, requestId, error}` |
 
